@@ -4,6 +4,48 @@ Structured log of development sessions and milestones.
 
 ---
 
+## 2026-05-05 — Session 4: Audit sweep — critical bug fix, replay correctness, robustness hardening
+
+**Focus:** Comprehensive codebase audit and fix of 14 issues across correctness, robustness, concurrency, and style
+
+**Context:** Phase 2 was complete with 61 tests passing. Two open breadcrumbs (BC-020, BC-021) from the prior session remained. User asked for a critical audit of the whole repo beyond existing breadcrumbs.
+
+**Delivered:**
+
+Critical bugs (1–3):
+- **sweep_expired_claims crash** — `_claims.py:339`: `row[0]`/`row[1]` on `dict_row` results raised `KeyError`; fixed to `row["work_item_id"]`/`row["actor_id"]`
+- **custom_fields lost in replay** — `_events.py:append_transition_event`: `custom_fields_update` now persisted in event payload under `custom_fields_update` key; `_replay.py` reads it back correctly
+- **not_before lost in replay** — `_work_items.py:create_work_item`: `not_before` now included in `created` event payload as ISO string
+- **acquire_claim return type** — `_claims.py`: return annotation corrected to `tuple[Claim, bool]` after BC-020 fix
+
+Robustness (4–9):
+- **hook_defaults wired through** — `WorkflowDefinition` gains `hook_defaults` field; `enqueue_hooks` accepts `max_retries` param; `transition()` reads `hook_defaults.max_retries` from workflow definition
+- **Unregistered hooks dead-lettered** — `_hooks.py:poll_and_process_hooks`: hooks with no registered handler move to dead letter instead of infinite re-poll
+- **Thread-safe handler registration** — `register_hook_handler` uses copy-on-write dict pattern; consumer reads atomic reference
+- **HookConsumer uses threading.Event** — `_running` bool replaced with `_stop = threading.Event()` for thread-safe stop signaling
+- **Replay exception narrowing** — `_replay.py`: `RuntimeError` (expected halts) vs generic `Exception` (unexpected, logged with `exc_info=True`)
+- **read_events filter validation** — `before_seq` without `work_item_id` or `start` without `end` now raises `INVALID_FILTER`
+
+Style/performance (11–12):
+- **Missing `from __future__ import annotations`** — Added to `_signing.py` and `_jcs.py`
+- **register_workflow timestamp** — Uses `RETURNING registered_at` instead of Python `datetime.now()` for consistent DB timestamps
+- **SQL() wrapping** — `register_workflow` queries now use `SQL()` wrapper (codebase consistency)
+- **Metrics unknown name warning** — `Metrics.inc()` logs warning on unrecognized counter names
+- **Per-hook savepoints** — `poll_and_process_hooks` wraps handler + status update in psycopg savepoint; one failure doesn't roll back the batch
+- **Redundant SELECT FOR UPDATE** — `append_event`/`append_transition_event` accept `_prelocked_wi` param; claim callers pass pre-locked row to skip redundant lock round-trip
+
+**Breadcrumbs resolved:** BC-020 (escalation metric extra read), BC-021 (hook consumer reconnect)
+
+**Breadcrumbs opened:** BC-022 (workflow re-registration idempotent vs spec reject — awaiting user decision)
+
+**Remaining open:** BC-009 (JCS edge cases), BC-016 (pagination), BC-017 (test coverage), BC-022 (re-registration design decision)
+
+**Test Results:** 61 passed in 21.78s
+
+**Lint:** clean (ruff)
+
+---
+
 ## 2026-05-05 — Session 3: Phase 2 implementation
 
 **Focus:** Implement all Phase 2 FRs (FR-10 escalation, FR-13 hooks/validators, FR-14 dead-letter requeue, FR-18 lint helper)

@@ -98,6 +98,8 @@ class Metrics:
         if name in counters:
             metric_name, doc = counters[name]
             self._counter(metric_name, doc).labels(project=project).inc(amount)
+        else:
+            log.warning("metrics.unknown_counter", name=name)
 
 
 def log_operation(

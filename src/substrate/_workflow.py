@@ -196,6 +196,7 @@ def build_definition(data: dict, raw_yaml: str) -> WorkflowDefinition:
         work_item_types=wits,
         link_types=links,
         attempt_threshold=data.get("attempt_threshold"),
+        hook_defaults=data.get("hook_defaults"),
         raw_yaml=raw_yaml,
     )
 

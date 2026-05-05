@@ -32,8 +32,7 @@ related: ["002", "003"]
 | 009 | JCS edge cases | medium | implemented (rfc8785 library), held open for edge-case testing |
 | 016 | Pagination moving target | low | resolved (stable work_item_id cursor), held open for AC coverage |
 | 017 | Test coverage for load-bearing ACs | high | implemented (22 tests), held open for Phase 2 AC coverage |
-| 020 | Escalation metric placement requires extra DB read | low | proposed |
-| 021 | Hook consumer swallows all exceptions, no reconnect | medium | proposed |
+| 022 | Workflow re-registration is idempotent but spec says reject | medium | proposed |
 
 ## Resolved
 
@@ -52,3 +51,5 @@ related: ["002", "003"]
 | 017 | Test coverage missing for load-bearing ACs | high | Added 22 tests across 5 new test files covering AC-17, AC-24, AC-25, AC-26, AC-28, AC-29, AC-33, AC-34 |
 | 018 | Tests reach into private _mgr attribute for out-of-band SQL | low | Created `substrate._testing` module centralizing `_mgr` coupling; all test files import from it |
 | 019 | Session-scoped smoke test fixture accumulates state across tests | low | Switched to module-scoped fixture with DROP SCHEMA teardown via `_testing.drop_project_schema`, matching pattern in other test files |
+| 020 | Escalation metric placement requires extra DB read | low | `_check_escalation` returns bool; `acquire_claim` returns `tuple[Claim, bool]`; no extra `get_work_item` read; documented `Literal` usage for NOTIFY |
+| 021 | Hook consumer swallows all exceptions, no reconnect | medium | Catch `psycopg.OperationalError` specifically; exponential backoff reconnection with max attempts; `threading.Event` replaces bare `bool`; documented `Literal` for NOTIFY payload |

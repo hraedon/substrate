@@ -4,7 +4,7 @@
 
 Substrate is a Python library providing coordination and durable state for agent pipelines over Postgres. It implements an event-sourced model with a transactionally-consistent denormalized projection.
 
-**Spec:** `spec.md` is authoritative. `spec.yaml` is a machine-readable sidecar.
+**Spec:** `spec.md` is authoritative. `spec.yaml` is a machine-readable sidecar. The spec is amendable when implementation reveals it cannot deliver a stated guarantee — see BC-008/FR-15 for precedent. Amendments are made deliberately, with a breadcrumb resolution note explaining the change; do not silently diverge from the spec.
 
 ## Architecture
 
@@ -37,16 +37,18 @@ src/substrate/
   _work_items.py    # Create, query (FR-05b)
   _claims.py        # Claim lifecycle
   _links.py         # Typed directed links
-  _transitions.py   # (merged into __init__.py transition method)
   _replay.py        # Rebuild projection from event log
   _integrity.py     # Startup version compatibility checks
   _workflow.py      # YAML parse, JSON Schema validate, semantic checks
+  _hooks.py         # Sync validators + async hook consumer (FR-13)
+  _lint.py          # Actor metadata lint helper (FR-18)
   _signing.py       # HMAC-SHA256 signing/verification
-  _jcs.py           # RFC 8785 JSON Canonicalization Scheme
+  _jcs.py           # RFC 8785 JSON Canonicalization Scheme (rfc8785 lib)
   _keys.py          # Key set management, hot-reload
   _observability.py # Structured logging + Prometheus metrics
   _errors.py        # ErrorCode enum + SubstrateError
   _types.py         # Frozen dataclasses for domain types
+  _testing.py       # Test-only helpers (centralizes _mgr coupling)
   _workflow_schema.json  # JSON Schema for workflow YAML files
 ```
 
@@ -95,12 +97,24 @@ sub.create_link(from_id, to_id, link_type, actor_id)
 sub.remove_link(from_id, to_id, link_type, actor_id)
 sub.replay()  # -> ReplayReport with drift detection
 sub.close()
+
+# Phase 2 — hooks, validators, escalation, lint
+sub.register_validator(transition_name, fn)        # sync, 5s timeout, blocks transition on failure
+sub.register_hook_handler(event_type, fn)          # async dispatch via hook_queue
+sub.start_hook_consumer()                          # background thread: LISTEN + 30s poll
+sub.stop_hook_consumer()
+sub.poll_hooks()                                   # manual drain (in lieu of consumer thread)
+sub.list_dead_lettered_hooks()
+sub.requeue_dead_lettered_hook(hook_id)
+sub.validate_actor_metadata(metadata, schema=None)  # lint helper (FR-18)
 ```
 
 **API constraints:**
 - `append_event` rejects transitions that match a workflow-defined transition name — use `transition()` for state changes
 - `heartbeat_claim` accepts optional `expected_attempt_number` to detect stale sessions after claim theft
 - Claim mutations (acquire, release, sweep) emit events for audit trail; heartbeats do not
+- Escalation (FR-10) fires automatically inside `acquire_claim` when `attempt_number >= attempt_threshold`; sets `needs_review`, emits `escalated`, idempotent
+- Hooks dead-letter after max retries and emit `hook_dead_lettered`; replay handles both `escalated` and `hook_dead_lettered`
 
 ## Key Design Decisions
 
@@ -109,11 +123,11 @@ sub.close()
 3. **Hybrid persistence.** Events authoritative; projection updated in same transaction. Not pure event-sourcing (no per-read replay cost).
 4. **Signing is internal.** RFC 8785 canonicalization + HMAC-SHA256 computed inside the library. Callers submit unsigned field tuples.
 
-## MVP Status
+## Status
 
-All MVP FRs implemented: FR-01 through FR-04, FR-05, FR-05b, FR-06 through FR-09b, FR-11, FR-12, FR-15 through FR-17, FR-19 through FR-23. 20 smoke tests passing.
+MVP + Phase 2 implemented. All FRs FR-01 through FR-23 are now in tree. 61 tests passing across 7 files (smoke, signing, replay, idempotency, concurrency, api_surface, phase2).
 
-**Deferred to Phase 2:** FR-10 (escalation), FR-13 (hooks/validators), FR-14 (dead-letter requeue), FR-18 (lint helper).
+Phase 2 additions: FR-10 (escalation), FR-13 (hooks/validators), FR-14 (dead-letter requeue), FR-18 (lint helper). Migration `003_escalation_idempotency.sql` adds the partial unique index that backstops escalation idempotency.
 
 ## Conventions
 
@@ -123,3 +137,31 @@ All MVP FRs implemented: FR-01 through FR-04, FR-05, FR-05b, FR-06 through FR-09
 - `dict_row` factory on all psycopg connections
 - All mutations go through `mgr.transaction()` which sets `SET LOCAL search_path`
 - Error codes are part of the API contract (§19.5)
+- Tests reach internal state via `substrate._testing` only — never import `_mgr` directly
+
+## Agent Workflow
+
+This project tracks work outside the code. New agents should orient to these conventions before making changes.
+
+### Breadcrumbs (`breadcrumbs/`)
+
+Defects, design questions, and improvements live one-file-per-item under `breadcrumbs/`, with resolved items moved to `breadcrumbs/resolved/`. Schema and severity definitions are in `breadcrumbs/README.md`. Open the index before starting work — it's the canonical "what's known to be wrong" list.
+
+When you notice an issue you're not fixing in this session, file a breadcrumb. When you fix one, move it to `resolved/` and update the README index. The `/end` skill automates both.
+
+### Worklog (`.substrate/worklog.md`)
+
+Reverse-chronological session log. Each entry: focus, context, what was delivered (with file references), breadcrumbs resolved, test/lint results. Read the most recent entry on session start; prepend a new entry on session end.
+
+### Reflections (`.substrate/reflections/`)
+
+Per-session subjective notes from the agent. Useful signal for the next agent — read the latest before starting. Written via the `/reflect` skill.
+
+### Session commands
+
+Substrate-specific wrappers in `.substrate/commands/`:
+- `/start` — orient to current state (worklog tail, open breadcrumbs, git status)
+- `/end` — run tests, reconcile breadcrumbs, update worklog, write reflection, commit
+- `/reflection` — write a reflection only
+
+System-wide skills (`/reflect`, `/end`) provide portable equivalents; the substrate-specific versions add test runs and worklog updates.

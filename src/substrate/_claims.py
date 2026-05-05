@@ -27,7 +27,7 @@ def acquire_claim(
     ttl_seconds: int,
     key_set,
     event_id: uuid.UUID | None = None,
-) -> Claim:
+) -> tuple[Claim, bool]:
     from ._events import append_event, lock_work_item
 
     wi = lock_work_item(conn, work_item_id)
@@ -70,7 +70,7 @@ def acquire_claim(
                 acquired_at=existing_claim["acquired_at"],
                 expires_at=new_expires,
                 attempt_number=existing_claim["attempt_number"],
-            )
+            ), False
         raise SubstrateError(
             ErrorCode.CLAIM_CONTESTED,
             f"Work item {work_item_id} is already claimed by {existing_claim['actor_id']}",
@@ -130,6 +130,7 @@ def acquire_claim(
                 "attempt_number": attempt_number,
             },
             event_id=event_id,
+            _prelocked_wi=wi,
         )
     else:
         append_event(
@@ -148,17 +149,19 @@ def acquire_claim(
                 "attempt_number": attempt_number,
             },
             event_id=event_id,
+            _prelocked_wi=wi,
         )
 
-    _check_escalation(conn, wi, attempt_number, key_set)
+    escalated = _check_escalation(conn, wi, attempt_number, key_set)
 
-    return Claim(
+    claim = Claim(
         work_item_id=work_item_id,
         actor_id=actor_id,
         acquired_at=acquired_at,
         expires_at=expires_at,
         attempt_number=attempt_number,
     )
+    return claim, escalated
 
 
 def _check_escalation(
@@ -166,7 +169,7 @@ def _check_escalation(
     wi: dict,
     attempt_number: int,
     key_set,
-) -> None:
+) -> bool:
     from ._events import append_event
 
     wf_row = conn.execute(
@@ -177,18 +180,18 @@ def _check_escalation(
         [wi["workflow_name"], wi["workflow_version"]],
     ).fetchone()
     if wf_row is None:
-        return
+        return False
 
     threshold = wf_row["definition"].get("attempt_threshold")
     if threshold is None or attempt_number < threshold:
-        return
+        return False
 
     existing = conn.execute(
         SQL("SELECT 1 FROM events WHERE work_item_id = %s AND transition = 'escalated'"),
         [wi["work_item_id"]],
     ).fetchone()
     if existing is not None:
-        return
+        return False
 
     conn.execute(
         SQL("UPDATE work_items_current SET needs_review = true WHERE work_item_id = %s"),
@@ -208,6 +211,8 @@ def _check_escalation(
         payload={"attempt_number": attempt_number, "threshold": threshold},
         event_id=uuid.uuid4(),
     )
+
+    return True
 
 
 def heartbeat_claim(
@@ -320,6 +325,7 @@ def release_claim(
             transition="claim_released",
             payload={"actor_id": actor_id},
             event_id=event_id or uuid.uuid4(),
+            _prelocked_wi=wi,
         )
 
 
@@ -333,8 +339,8 @@ def sweep_expired_claims(conn: psycopg.Connection, key_set) -> int:
     ).fetchall()
 
     for row in result:
-        wi_id = row[0]
-        prior_actor_id = row[1]
+        wi_id = row["work_item_id"]
+        prior_actor_id = row["actor_id"]
 
         wi = lock_work_item(conn, wi_id)
 
@@ -362,6 +368,7 @@ def sweep_expired_claims(conn: psycopg.Connection, key_set) -> int:
                     "expired_at": now.isoformat(),
                 },
                 event_id=uuid.uuid4(),
+                _prelocked_wi=wi,
             )
 
     return len(result)

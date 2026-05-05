@@ -108,11 +108,12 @@ def append_event(
     payload: dict | None,
     event_id: uuid.UUID,
     expected_event_seq: int | None = None,
+    _prelocked_wi: dict | None = None,
 ) -> Event:
     key_entry = key_set.active_key()
     key_id = key_entry.key_id
 
-    wi_row = lock_work_item(conn, work_item_id)
+    wi_row = _prelocked_wi if _prelocked_wi is not None else lock_work_item(conn, work_item_id)
     if wi_row is None:
         raise SubstrateError(
             ErrorCode.WORK_ITEM_NOT_FOUND,
@@ -204,11 +205,12 @@ def append_transition_event(
     expected_event_seq: int | None = None,
     custom_fields_update: dict | None = None,
     release_claim: bool = True,
+    _prelocked_wi: dict | None = None,
 ) -> Event:
     key_entry = key_set.active_key()
     key_id = key_entry.key_id
 
-    wi_row = lock_work_item(conn, work_item_id)
+    wi_row = _prelocked_wi if _prelocked_wi is not None else lock_work_item(conn, work_item_id)
     if wi_row is None:
         raise SubstrateError(
             ErrorCode.WORK_ITEM_NOT_FOUND,
@@ -224,12 +226,16 @@ def append_transition_event(
     next_seq = wi_row["next_event_seq"]
     check_expected_seq(next_seq, expected_event_seq)
 
+    stored_payload = dict(payload) if payload else {}
+    if custom_fields_update:
+        stored_payload["custom_fields_update"] = custom_fields_update
+
     signature, canonical_hash, canonical_envelope = sign_event(
         event_id=event_id,
         work_item_id=work_item_id,
         actor_id=actor_id,
         transition=transition_name,
-        payload=payload,
+        payload=stored_payload,
         key=key_entry.secret,
     )
 
@@ -256,7 +262,7 @@ def append_transition_event(
             workflow_name,
             workflow_version,
             transition_name,
-            psycopg.types.json.Jsonb(payload) if payload is not None else None,
+            psycopg.types.json.Jsonb(stored_payload) if stored_payload else None,
             canonical_hash,
             signature,
             canonical_envelope,
@@ -308,7 +314,7 @@ def append_transition_event(
         workflow_version=workflow_version,
         timestamp=row["timestamp"],
         transition=transition_name,
-        payload=payload,
+        payload=stored_payload,
         payload_canonical_hash=canonical_hash,
         signature=signature,
         canonical_envelope=canonical_envelope,

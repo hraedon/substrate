@@ -144,7 +144,10 @@ class Substrate:
         self._validators[name] = handler
 
     def register_hook_handler(self, name: str, handler: Callable) -> None:
-        self._hook_handlers[name] = handler
+        updated = dict(self._hook_handlers)
+        updated[name] = handler
+        self._hook_handlers = updated
+        self._hook_consumer._handlers = updated
 
     def start_hook_consumer(self) -> None:
         self._hook_consumer.start()
@@ -168,9 +171,13 @@ class Substrate:
         try:
             wf = parse_and_validate(yaml_content)
             with self._mgr.transaction() as conn:
+                from psycopg.sql import SQL
+
                 existing = conn.execute(
-                    "SELECT workflow_name, version, substrate_version, registered_at "
-                    "FROM workflow_registry WHERE workflow_name = %s AND version = %s",
+                    SQL(
+                        "SELECT workflow_name, version, substrate_version, registered_at "
+                        "FROM workflow_registry WHERE workflow_name = %s AND version = %s"
+                    ),
                     [wf.name, wf.version],
                 ).fetchone()
                 if existing is not None:
@@ -182,15 +189,18 @@ class Substrate:
                         registered_at=existing["registered_at"],
                     )
 
-                conn.execute(
-                    "INSERT INTO workflow_registry "
-                    "(workflow_name, version, substrate_version, definition) "
-                    "VALUES (%s, %s, %s, %s)",
+                row = conn.execute(
+                    SQL(
+                        "INSERT INTO workflow_registry "
+                        "(workflow_name, version, substrate_version, definition) "
+                        "VALUES (%s, %s, %s, %s) "
+                        "RETURNING registered_at"
+                    ),
                     [
                         wf.name, wf.version, wf.substrate_version,
                         psycopg.types.json.Jsonb(wf.to_dict()),
                     ],
-                )
+                ).fetchone()
 
             self._metrics.inc("workflows_registered", self._project)
             timer.log("ok", detail=wf.name)
@@ -198,7 +208,7 @@ class Substrate:
                 name=wf.name,
                 version=wf.version,
                 substrate_version=wf.substrate_version,
-                registered_at=datetime.now(),
+                registered_at=row["registered_at"],
             )
         except SubstrateError:
             timer.log("error")
@@ -440,6 +450,9 @@ class Substrate:
                 if hook_names:
                     from ._hooks import enqueue_hooks
 
+                    hook_defaults = defn.get("hook_defaults") or {}
+                    wf_max_retries = hook_defaults.get("max_retries", 3)
+
                     enqueue_hooks(
                         conn,
                         event_id=evt.event_id,
@@ -448,6 +461,7 @@ class Substrate:
                         transition=transition_name,
                         event_payload=payload,
                         channel=self._hook_channel,
+                        max_retries=wf_max_retries,
                     )
                     self._metrics.inc("hooks_dispatched", self._project, amount=len(hook_names))
 
@@ -472,6 +486,16 @@ class Substrate:
         limit: int = 100,
         before_seq: int | None = None,
     ) -> list[Event]:
+        if before_seq is not None and work_item_id is None:
+            raise SubstrateError(
+                ErrorCode.INVALID_FILTER,
+                "before_seq requires work_item_id",
+            )
+        if (start is None) != (end is None):
+            raise SubstrateError(
+                ErrorCode.INVALID_FILTER,
+                "start and end must be provided together",
+            )
         with self._mgr.transaction() as conn:
             if work_item_id is not None:
                 return _read_by_work_item(conn, work_item_id, limit=limit, before_seq=before_seq)
@@ -533,15 +557,14 @@ class Substrate:
         timer = OpTimer(self._project, "acquire_claim")
         try:
             with self._mgr.transaction() as conn:
-                claim = _acquire(
+                claim, escalated = _acquire(
                     conn, work_item_id, actor_id, ttl_seconds,
                     self._keys, event_id,
                 )
 
             self._metrics.inc("claims_acquired", self._project)
 
-            refreshed = self.get_work_item(work_item_id)
-            if refreshed is not None and refreshed.needs_review:
+            if escalated:
                 self._metrics.inc("escalations", self._project)
 
             timer.log("ok", work_item_id=str(work_item_id))

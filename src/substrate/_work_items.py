@@ -136,6 +136,7 @@ def create_work_item(
             "work_item_type": work_item_type,
             "initial_state": initial_state,
             "custom_fields": validated_fields,
+            "not_before": not_before.isoformat() if not_before else None,
         },
         event_id=event_id,
     )

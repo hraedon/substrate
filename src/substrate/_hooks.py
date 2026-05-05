@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeout
@@ -50,14 +51,15 @@ def enqueue_hooks(
     transition: str | None,
     event_payload: dict | None,
     channel: str,
+    max_retries: int = 3,
 ) -> None:
     import psycopg.types.json
 
     for hook_name in hook_names:
         conn.execute(
             SQL(
-                "INSERT INTO hook_queue (event_id, hook_name, hook_type, payload) "
-                "VALUES (%s, %s, 'async', %s)"
+                "INSERT INTO hook_queue (event_id, hook_name, hook_type, payload, max_retries) "
+                "VALUES (%s, %s, 'async', %s, %s)"
             ),
             [
                 event_id,
@@ -67,10 +69,13 @@ def enqueue_hooks(
                     "transition": transition,
                     "event_payload": event_payload,
                 }),
+                max_retries,
             ],
         )
 
     if hook_names:
+        # NOTIFY payload does not support bind parameters; Literal produces
+        # a properly-escaped SQL string literal for the event_id.
         conn.execute(
             SQL("NOTIFY {}, {}").format(Identifier(channel), Literal(str(event_id))),
         )
@@ -108,6 +113,9 @@ def poll_and_process_hooks(
 
         if handler is None:
             log.warning("hooks.handler_not_registered", hook_name=hook_name)
+            _move_to_dead_letter(conn, row, f"Handler {hook_name!r} not registered", key_set)
+            if metrics:
+                metrics.inc("hooks_dead_lettered", project)
             continue
 
         payload = row["payload"] or {}
@@ -126,13 +134,17 @@ def poll_and_process_hooks(
         )
 
         try:
-            handler(ctx)
-            conn.execute(
-                SQL("UPDATE hook_queue SET status = 'completed', updated_at = now() WHERE id = %s"),
-                [hook_id],
-            )
-            if metrics:
-                metrics.inc("hooks_succeeded", project)
+            with conn.transaction():
+                handler(ctx)
+                conn.execute(
+                    SQL(
+                        "UPDATE hook_queue SET status = 'completed', updated_at = now() "
+                        "WHERE id = %s"
+                    ),
+                    [hook_id],
+                )
+                if metrics:
+                    metrics.inc("hooks_succeeded", project)
             processed += 1
         except Exception as e:
             retry_count = row["retry_count"] + 1
@@ -282,20 +294,20 @@ class HookConsumer:
         self._key_set = key_set
         self._metrics = metrics
         self._poll_interval = poll_interval
-        self._running = False
+        self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._channel = f"substrate_hooks_{schema}"
 
     def start(self) -> None:
-        if self._running:
+        if self._thread is not None and self._thread.is_alive():
             return
-        self._running = True
+        self._stop.clear()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
         log.info("hooks.consumer_started", project=self._project)
 
     def stop(self) -> None:
-        self._running = False
+        self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout=5)
             self._thread = None
@@ -303,9 +315,9 @@ class HookConsumer:
 
     @property
     def is_running(self) -> bool:
-        return self._running
+        return self._thread is not None and self._thread.is_alive()
 
-    def _run(self) -> None:
+    def _connect(self):
         from psycopg.rows import dict_row
 
         conn = psycopg.connect(
@@ -317,18 +329,63 @@ class HookConsumer:
             SQL("SET search_path TO {}").format(Identifier(self._schema))
         )
         conn.execute(SQL("LISTEN {}").format(Identifier(self._channel)))
+        return conn
+
+    def _run(self) -> None:
+        max_reconnect_attempts = 10
+        reconnect_backoff_base = 2.0
+        reconnect_attempts = 0
 
         try:
-            while self._running:
+            conn = self._connect()
+        except Exception as e:
+            log.error("hooks.initial_connect_failed", error=str(e))
+            return
+
+        try:
+            while not self._stop.is_set():
                 try:
                     for _notify in conn.notifies(timeout=self._poll_interval):
-                        if not self._running:
+                        if self._stop.is_set():
                             break
-                except Exception:
-                    pass
+                except psycopg.OperationalError as e:
+                    if self._stop.is_set():
+                        break
+                    reconnect_attempts += 1
+                    if reconnect_attempts > max_reconnect_attempts:
+                        log.error(
+                            "hooks.reconnect_exhausted",
+                            attempts=reconnect_attempts,
+                            error=str(e),
+                        )
+                        break
+                    backoff = min(
+                        reconnect_backoff_base * (2 ** (reconnect_attempts - 1)),
+                        60.0,
+                    )
+                    log.warning(
+                        "hooks.connection_lost",
+                        attempt=reconnect_attempts,
+                        backoff=backoff,
+                        error=str(e),
+                    )
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+                    time.sleep(backoff)
+                    try:
+                        conn = self._connect()
+                        reconnect_attempts = 0
+                        log.info("hooks.reconnected", attempt=reconnect_attempts)
+                    except Exception as ce:
+                        log.error("hooks.reconnect_failed", error=str(ce))
+                    continue
 
-                if not self._running:
+                if self._stop.is_set():
                     break
+
+                reconnect_attempts = 0
 
                 try:
                     with conn.transaction():
@@ -339,7 +396,12 @@ class HookConsumer:
                             self._metrics,
                             self._project,
                         )
+                except psycopg.OperationalError as e:
+                    log.error("hooks.poll_connection_error", error=str(e))
                 except Exception as e:
                     log.error("hooks.poll_error", error=str(e))
         finally:
-            conn.close()
+            try:
+                conn.close()
+            except Exception:
+                pass

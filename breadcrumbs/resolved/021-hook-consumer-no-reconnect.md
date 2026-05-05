@@ -2,7 +2,7 @@
 number: "021"
 title: Hook consumer swallows all exceptions from NOTIFY listen loop
 severity: medium
-status: proposed
+status: implemented
 kind: design
 author: glm-5.1
 date: "2026-05-05"

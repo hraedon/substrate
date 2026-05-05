@@ -2,7 +2,7 @@
 number: "020"
 title: Escalation metric placement requires extra DB read
 severity: low
-status: proposed
+status: implemented
 kind: improvement
 author: glm-5.1
 date: "2026-05-05"

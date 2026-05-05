@@ -3,11 +3,14 @@ from __future__ import annotations
 from datetime import datetime
 
 import psycopg
+import structlog
 from psycopg.sql import SQL, Identifier
 
 from ._keys import KeySet
 from ._signing import verify_event
 from ._types import ReplayReport
+
+log = structlog.get_logger()
 
 _EVENT_FIELDS = (
     "event_id, work_item_id, event_seq, actor_id, actor_kind, "
@@ -76,13 +79,27 @@ def replay(
 
         try:
             replayed_state = _replay_work_item(conn, wi_id, events, key_set)
-        except Exception as e:
+        except RuntimeError as e:
             halted_count += 1
+            log.error("replay.halted", work_item_id=str(wi_id), error=str(e))
             conn.execute(
                 SQL(
                     "INSERT INTO {} (work_item_id, category, detail) VALUES (%s, %s, %s)"
                 ).format(Identifier(report_table)),
                 [wi_id, "halted", str(e)],
+            )
+            continue
+        except Exception as e:
+            halted_count += 1
+            log.error(
+                "replay.unexpected_error",
+                work_item_id=str(wi_id), error=str(e), exc_info=True,
+            )
+            conn.execute(
+                SQL(
+                    "INSERT INTO {} (work_item_id, category, detail) VALUES (%s, %s, %s)"
+                ).format(Identifier(report_table)),
+                [wi_id, "halted", f"unexpected: {e}"],
             )
             continue
 
@@ -249,8 +266,8 @@ def _replay_work_item(
                     )
 
             payload = evt["payload"] or {}
-            if payload.get("custom_fields"):
-                custom_fields = {**custom_fields, **payload["custom_fields"]}
+            if payload.get("custom_fields_update"):
+                custom_fields = {**custom_fields, **payload["custom_fields_update"]}
 
     return {
         "current_state": state,

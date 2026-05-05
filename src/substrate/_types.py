@@ -315,7 +315,8 @@ class WorkflowDefinition:
     work_item_types: list[WorkItemTypeDef]
     link_types: list[LinkTypeDef]
     attempt_threshold: int | None
-    raw_yaml: str
+    hook_defaults: dict | None = None
+    raw_yaml: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -330,6 +331,7 @@ class WorkflowDefinition:
             "work_item_types": [w.to_dict() for w in self.work_item_types],
             "link_types": [lt.to_dict() for lt in self.link_types],
             "attempt_threshold": self.attempt_threshold,
+            "hook_defaults": self.hook_defaults,
             "raw_yaml": self.raw_yaml,
         }
 
@@ -347,6 +349,7 @@ class WorkflowDefinition:
             work_item_types=[WorkItemTypeDef.from_dict(w) for w in data["work_item_types"]],
             link_types=[LinkTypeDef.from_dict(lt) for lt in data["link_types"]],
             attempt_threshold=data.get("attempt_threshold"),
+            hook_defaults=data.get("hook_defaults"),
             raw_yaml=data["raw_yaml"],
         )
 
