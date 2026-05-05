@@ -84,8 +84,11 @@ sub = Substrate(dsn, "my_project", hmac_key_path="/path/to/keys.json")
 sub.register_workflow(yaml_content)
 sub.create_work_item(workflow_name, work_item_type, actor_id, ...)
 sub.transition(work_item_id, transition_name, actor_id, ...)
+sub.append_event(work_item_id, actor_id, *, transition=..., payload=...)
 sub.acquire_claim(work_item_id, actor_id, ttl_seconds=300)
+sub.heartbeat_claim(work_item_id, actor_id, ttl_seconds, *, expected_attempt_number=...)
 sub.release_claim(work_item_id, actor_id)
+sub.sweep_expired_claims()
 sub.query_work_items(workflow_name=..., current_states=[...], claimable_now=True)
 sub.read_events(work_item_id=...)
 sub.create_link(from_id, to_id, link_type, actor_id)
@@ -93,6 +96,11 @@ sub.remove_link(from_id, to_id, link_type, actor_id)
 sub.replay()  # -> ReplayReport with drift detection
 sub.close()
 ```
+
+**API constraints:**
+- `append_event` rejects transitions that match a workflow-defined transition name — use `transition()` for state changes
+- `heartbeat_claim` accepts optional `expected_attempt_number` to detect stale sessions after claim theft
+- Claim mutations (acquire, release, sweep) emit events for audit trail; heartbeats do not
 
 ## Key Design Decisions
 

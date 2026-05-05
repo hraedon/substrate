@@ -162,6 +162,31 @@ def remove_link(
     by_id = {r["work_item_id"]: r for r in rows}
     from_row = by_id[from_work_item_id]
 
+    live_link = conn.execute(
+        SQL(
+            "SELECT 1 FROM events "
+            "WHERE work_item_id = %s "
+            "AND transition = 'link_created' "
+            "AND payload->>'to_work_item_id' = %s "
+            "AND payload->>'link_type' = %s "
+            "AND NOT EXISTS ("
+            "SELECT 1 FROM events e_r "
+            "WHERE e_r.work_item_id = events.work_item_id "
+            "AND e_r.transition = 'link_removed' "
+            "AND e_r.payload->>'to_work_item_id' = events.payload->>'to_work_item_id' "
+            "AND e_r.payload->>'link_type' = events.payload->>'link_type' "
+            "AND e_r.event_seq > events.event_seq"
+            ") LIMIT 1"
+        ),
+        [from_work_item_id, str(to_work_item_id), link_type],
+    ).fetchone()
+
+    if live_link is None:
+        raise SubstrateError(
+            ErrorCode.LINK_NOT_FOUND,
+            f"No live link of type {link_type!r} from {from_work_item_id} to {to_work_item_id}",
+        )
+
     append_event(
         conn=conn,
         work_item_id=from_work_item_id,

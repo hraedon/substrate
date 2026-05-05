@@ -276,10 +276,17 @@ def query_work_items(
 
     if has_link_type is not None:
         conditions.append(
-            f"EXISTS (SELECT 1 FROM events e "
-            f"WHERE e.work_item_id = work_items_current.work_item_id "
-            f"AND e.transition = 'link_created' "
-            f"AND e.payload->>'link_type' = {_ph(has_link_type)})"
+            f"EXISTS (SELECT 1 FROM events e_c "
+            f"WHERE e_c.work_item_id = work_items_current.work_item_id "
+            f"AND e_c.transition = 'link_created' "
+            f"AND e_c.payload->>'link_type' = {_ph(has_link_type)} "
+            f"AND NOT EXISTS ("
+            f"SELECT 1 FROM events e_r "
+            f"WHERE e_r.work_item_id = e_c.work_item_id "
+            f"AND e_r.transition = 'link_removed' "
+            f"AND e_r.payload->>'link_type' = e_c.payload->>'link_type' "
+            f"AND e_r.payload->>'to_work_item_id' = e_c.payload->>'to_work_item_id' "
+            f"AND e_r.event_seq > e_c.event_seq))"
         )
 
     where = ""

@@ -4,6 +4,37 @@ Structured log of development sessions and milestones.
 
 ---
 
+## 2026-05-05 — Session 2 with glm-5.1 (opencode)
+
+**Focus:** Resolve breadcrumbs across replay, claims, idempotency, links, and API surface
+
+**Context:** Previous session delivered the full MVP with 20 passing tests. A review by claude-opus produced 17 breadcrumbs (defects and design questions). User asked to read the worklog and reasoning.log, then resolve breadcrumbs in priority order.
+
+**Delivered:**
+- **BC-001** — `_replay.py`: Added signature verification + key status check per event; halted on revoked keys or signature mismatch
+- **BC-002** — `_replay.py`: Replay table now populated with replay-derived state via explicit INSERT, not live snapshot
+- **BC-003** — `_replay.py`: `_states_match` compares all 5 derived fields (current_state, custom_fields, needs_review, not_before, last_event_seq); added `_diff_fields` for actionable drift detail
+- **BC-004** — `_events.py`: `check_idempotency` now compares actor_id and transition on collision; raises `IDEMPOTENCY_COLLISION_WITH_DIFFERENT_PAYLOAD`
+- **BC-005** — `_claims.py`: Claim mutations now emit events (claim_acquired, claim_stolen, claim_released, claim_expired); replay updated to recognize them
+- **BC-006** — `_claims.py`: `heartbeat_claim` accepts `expected_attempt_number`; rejects stale-session heartbeats with CLAIM_LOST
+- **BC-010** — `__init__.py`: `Substrate.append_event` rejects transitions that match a workflow-defined transition; forces use of `transition()` instead
+- **BC-011** — `_types.py` + `_events.py`: Added `workflow_name: str` to Event dataclass and all constructors
+- **BC-012** — `_events.py`: Both append functions use `RETURNING timestamp`; Event.timestamp now matches BR-08 (server-stamped)
+- **BC-013** — `_work_items.py`: `has_link_type` filter now excludes links with subsequent `link_removed` events via NOT EXISTS subquery
+- **BC-014** — `_links.py`: `remove_link` validates live link existence before emitting `link_removed`; raises LINK_NOT_FOUND
+- **BC-015** — `_replay.py`: Transition matching uses `(name, from_state)` tuple; name-only matches from wrong state now halt
+- Adapted start/end/reflection skills from `/projects/software-factory` into `.substrate/commands/`
+
+**Breadcrumbs resolved:** BC-001, BC-002, BC-003, BC-004, BC-005, BC-006, BC-010, BC-011, BC-012, BC-013, BC-014, BC-015 (12 of 17)
+
+**Remaining open:** BC-007 (unwired idempotency keys), BC-008 (signing jsonb-drift, design), BC-009 (JCS edges, design), BC-016 (pagination, design), BC-017 (test coverage)
+
+**Test Results:** 20 passed in 0.63s
+
+**Lint:** 0 errors (ruff)
+
+---
+
 ## 2026-05-05 — Session with glm-5.1 (opencode)
 
 **Focus:** Full MVP implementation of substrate library

@@ -25,9 +25,10 @@ def acquire_claim(
     work_item_id: uuid.UUID,
     actor_id: str,
     ttl_seconds: int,
+    key_set,
     idempotency_key: uuid.UUID | None = None,
 ) -> Claim:
-    from ._events import lock_work_item
+    from ._events import append_event, lock_work_item
 
     wi = lock_work_item(conn, work_item_id)
     if wi is None:
@@ -75,9 +76,11 @@ def acquire_claim(
             f"Work item {work_item_id} is already claimed by {existing_claim['actor_id']}",
         )
 
+    prior_actor_id = None
     attempt_number = 1
     if existing_claim is not None:
         attempt_number = existing_claim["attempt_number"] + 1
+        prior_actor_id = existing_claim["actor_id"]
 
     acquired_at = now
     expires_at = acquired_at + timedelta(seconds=ttl_seconds)
@@ -109,6 +112,44 @@ def acquire_claim(
         [actor_id, expires_at, work_item_id],
     )
 
+    event_id = idempotency_key or uuid.uuid4()
+    if prior_actor_id is not None:
+        append_event(
+            conn=conn,
+            work_item_id=work_item_id,
+            actor_id=actor_id,
+            actor_kind="system",
+            actor_metadata=None,
+            key_set=key_set,
+            workflow_name=wi["workflow_name"],
+            workflow_version=wi["workflow_version"],
+            transition="claim_stolen",
+            payload={
+                "prior_actor_id": prior_actor_id,
+                "new_actor_id": actor_id,
+                "attempt_number": attempt_number,
+            },
+            event_id=event_id,
+        )
+    else:
+        append_event(
+            conn=conn,
+            work_item_id=work_item_id,
+            actor_id=actor_id,
+            actor_kind="system",
+            actor_metadata=None,
+            key_set=key_set,
+            workflow_name=wi["workflow_name"],
+            workflow_version=wi["workflow_version"],
+            transition="claim_acquired",
+            payload={
+                "actor_id": actor_id,
+                "ttl_seconds": ttl_seconds,
+                "attempt_number": attempt_number,
+            },
+            event_id=event_id,
+        )
+
     return Claim(
         work_item_id=work_item_id,
         actor_id=actor_id,
@@ -123,6 +164,7 @@ def heartbeat_claim(
     work_item_id: uuid.UUID,
     actor_id: str,
     ttl_seconds: int,
+    expected_attempt_number: int | None = None,
 ) -> Claim:
     from ._events import lock_work_item
 
@@ -143,6 +185,16 @@ def heartbeat_claim(
         raise SubstrateError(
             ErrorCode.CLAIM_LOST,
             f"Claim on {work_item_id} is now held by {claim_row['actor_id']}, not {actor_id}",
+        )
+
+    if (
+        expected_attempt_number is not None
+        and claim_row["attempt_number"] != expected_attempt_number
+    ):
+        raise SubstrateError(
+            ErrorCode.CLAIM_LOST,
+            f"Claim attempt_number is {claim_row['attempt_number']}, "
+            f"expected {expected_attempt_number}",
         )
 
     new_expires = datetime.now(UTC) + timedelta(seconds=ttl_seconds)
@@ -168,10 +220,11 @@ def release_claim(
     conn: psycopg.Connection,
     work_item_id: uuid.UUID,
     actor_id: str,
+    key_set,
 ) -> None:
-    from ._events import lock_work_item
+    from ._events import append_event, lock_work_item
 
-    lock_work_item(conn, work_item_id)
+    wi = lock_work_item(conn, work_item_id)
 
     claim_row = conn.execute(
         SQL("SELECT * FROM claims WHERE work_item_id = %s"),
@@ -202,21 +255,61 @@ def release_claim(
         [work_item_id],
     )
 
+    if wi is not None:
+        append_event(
+            conn=conn,
+            work_item_id=work_item_id,
+            actor_id=actor_id,
+            actor_kind="system",
+            actor_metadata=None,
+            key_set=key_set,
+            workflow_name=wi["workflow_name"],
+            workflow_version=wi["workflow_version"],
+            transition="claim_released",
+            payload={"actor_id": actor_id},
+            event_id=uuid.uuid4(),
+        )
 
-def sweep_expired_claims(conn: psycopg.Connection) -> int:
+
+def sweep_expired_claims(conn: psycopg.Connection, key_set) -> int:
+    from ._events import append_event, lock_work_item
+
     now = datetime.now(UTC)
     result = conn.execute(
-        SQL("DELETE FROM claims WHERE expires_at < %s RETURNING work_item_id"),
+        SQL("DELETE FROM claims WHERE expires_at < %s RETURNING work_item_id, actor_id"),
         [now],
     ).fetchall()
 
     for row in result:
+        wi_id = row[0]
+        prior_actor_id = row[1]
+
+        wi = lock_work_item(conn, wi_id)
+
         conn.execute(
             SQL(
                 "UPDATE work_items_current SET claimed_by = NULL, claim_expires_at = NULL "
                 "WHERE work_item_id = %s AND claimed_by IS NOT NULL"
             ),
-            [row[0]],
+            [wi_id],
         )
+
+        if wi is not None:
+            append_event(
+                conn=conn,
+                work_item_id=wi_id,
+                actor_id=prior_actor_id or "system",
+                actor_kind="system",
+                actor_metadata=None,
+                key_set=key_set,
+                workflow_name=wi["workflow_name"],
+                workflow_version=wi["workflow_version"],
+                transition="claim_expired",
+                payload={
+                    "actor_id": prior_actor_id,
+                    "expired_at": now.isoformat(),
+                },
+                event_id=uuid.uuid4(),
+            )
 
     return len(result)

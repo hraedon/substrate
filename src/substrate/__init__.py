@@ -243,6 +243,22 @@ class Substrate:
                         f"Work item {work_item_id} not found",
                     )
 
+                if transition is not None:
+                    wf_data = conn.execute(
+                        "SELECT definition FROM workflow_registry "
+                        "WHERE workflow_name = %s AND version = %s",
+                        [wi_row["workflow_name"], wi_row["workflow_version"]],
+                    ).fetchone()
+                    if wf_data is not None:
+                        for t in wf_data["definition"].get("transitions", []):
+                            if t["name"] == transition:
+                                raise SubstrateError(
+                                    ErrorCode.TRANSITION_VIA_APPEND_BLOCKED,
+                                    f"Transition {transition!r} is defined in workflow "
+                                    f"{wi_row['workflow_name']!r}. "
+                                    f"Use Substrate.transition() instead.",
+                                )
+
                 evt = _append_event(
                     conn,
                     work_item_id=work_item_id,
@@ -432,7 +448,10 @@ class Substrate:
         timer = OpTimer(self._project, "acquire_claim")
         try:
             with self._mgr.transaction() as conn:
-                claim = _acquire(conn, work_item_id, actor_id, ttl_seconds, idempotency_key)
+                claim = _acquire(
+                    conn, work_item_id, actor_id, ttl_seconds,
+                    self._keys, idempotency_key,
+                )
 
             self._metrics.inc("claims_acquired", self._project)
             timer.log("ok", work_item_id=str(work_item_id))
@@ -449,13 +468,18 @@ class Substrate:
         work_item_id: uuid.UUID,
         actor_id: str,
         ttl_seconds: int = 300,
+        *,
+        expected_attempt_number: int | None = None,
     ) -> Claim:
         from ._claims import heartbeat_claim as _heartbeat
 
         timer = OpTimer(self._project, "heartbeat_claim")
         try:
             with self._mgr.transaction() as conn:
-                claim = _heartbeat(conn, work_item_id, actor_id, ttl_seconds)
+                claim = _heartbeat(
+                    conn, work_item_id, actor_id, ttl_seconds,
+                    expected_attempt_number=expected_attempt_number,
+                )
 
             timer.log("ok", work_item_id=str(work_item_id))
             return claim
@@ -473,7 +497,7 @@ class Substrate:
         timer = OpTimer(self._project, "release_claim")
         try:
             with self._mgr.transaction() as conn:
-                _release(conn, work_item_id, actor_id)
+                _release(conn, work_item_id, actor_id, self._keys)
 
             self._metrics.inc("claims_released", self._project)
             timer.log("ok", work_item_id=str(work_item_id))
@@ -485,7 +509,7 @@ class Substrate:
         from ._claims import sweep_expired_claims as _sweep
 
         with self._mgr.transaction() as conn:
-            count = _sweep(conn)
+            count = _sweep(conn, self._keys)
         self._metrics.inc("claims_expired", self._project, amount=count)
         return count
 
@@ -564,7 +588,7 @@ class Substrate:
         timer = OpTimer(self._project, "replay")
         try:
             with self._mgr.transaction() as conn:
-                report = _replay(conn, self._mgr.schema, self._project)
+                report = _replay(conn, self._mgr.schema, self._project, self._keys)
 
             if report.replayed_drift > 0:
                 self._metrics.inc("replay_drift_count", self._project, amount=report.replayed_drift)

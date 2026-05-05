@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import datetime
 
 import psycopg
 from psycopg.sql import SQL
@@ -27,6 +27,7 @@ def _row_to_event(row: dict) -> Event:
         actor_kind=row["actor_kind"],
         actor_metadata=row["actor_metadata"],
         key_id=row["key_id"],
+        workflow_name=row["workflow_name"],
         workflow_version=row["workflow_version"],
         timestamp=row["timestamp"],
         transition=row["transition"],
@@ -56,14 +57,30 @@ def lock_work_item(
 def check_idempotency(
     conn: psycopg.Connection,
     event_id: uuid.UUID,
+    actor_id: str | None = None,
+    transition: str | None = None,
+    payload: dict | None = None,
 ) -> Event | None:
     row = conn.execute(
         SQL(f"SELECT {_EVENT_FIELDS} FROM events WHERE event_id = %s"),
         [event_id],
     ).fetchone()
-    if row is not None:
-        return _row_to_event(row)
-    return None
+    if row is None:
+        return None
+    existing = _row_to_event(row)
+    if actor_id is not None and existing.actor_id != actor_id:
+        raise SubstrateError(
+            ErrorCode.IDEMPOTENCY_COLLISION_WITH_DIFFERENT_PAYLOAD,
+            f"event_id {event_id} already used by actor {existing.actor_id!r}, "
+            f"not {actor_id!r}",
+        )
+    if transition is not None and existing.transition != transition:
+        raise SubstrateError(
+            ErrorCode.IDEMPOTENCY_COLLISION_WITH_DIFFERENT_PAYLOAD,
+            f"event_id {event_id} already used with transition {existing.transition!r}, "
+            f"not {transition!r}",
+        )
+    return existing
 
 
 def check_expected_seq(
@@ -101,7 +118,7 @@ def append_event(
             f"Work item {work_item_id} not found",
         )
 
-    existing = check_idempotency(conn, event_id)
+    existing = check_idempotency(conn, event_id, actor_id=actor_id, transition=transition)
     if existing is not None:
         return existing
 
@@ -118,12 +135,13 @@ def append_event(
     )
 
     event_seq = next_seq
-    conn.execute(
+    row = conn.execute(
         SQL(
             "INSERT INTO events (event_id, work_item_id, event_seq, actor_id, actor_kind, "
             "actor_metadata, key_id, workflow_name, workflow_version, "
             "transition, payload, payload_canonical_hash, signature) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+            "RETURNING timestamp"
         ),
         [
             event_id,
@@ -140,7 +158,7 @@ def append_event(
             canonical_hash,
             signature,
         ],
-    )
+    ).fetchone()
 
     conn.execute(
         SQL(
@@ -159,8 +177,9 @@ def append_event(
         actor_kind=actor_kind,
         actor_metadata=actor_metadata,
         key_id=key_id,
+        workflow_name=workflow_name,
         workflow_version=workflow_version,
-        timestamp=datetime.now(UTC),
+        timestamp=row["timestamp"],
         transition=transition,
         payload=payload,
         payload_canonical_hash=canonical_hash,
@@ -193,7 +212,9 @@ def append_transition_event(
             f"Work item {work_item_id} not found",
         )
 
-    existing = check_idempotency(conn, event_id)
+    existing = check_idempotency(
+        conn, event_id, actor_id=actor_id, transition=transition_name,
+    )
     if existing is not None:
         return existing
 
@@ -213,12 +234,13 @@ def append_transition_event(
     workflow_name = wi_row["workflow_name"]
     workflow_version = wi_row["workflow_version"]
 
-    conn.execute(
+    row = conn.execute(
         SQL(
             "INSERT INTO events (event_id, work_item_id, event_seq, actor_id, actor_kind, "
             "actor_metadata, key_id, workflow_name, workflow_version, "
             "transition, payload, payload_canonical_hash, signature) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+            "RETURNING timestamp"
         ),
         [
             event_id,
@@ -235,7 +257,7 @@ def append_transition_event(
             canonical_hash,
             signature,
         ],
-    )
+    ).fetchone()
 
     merged_fields = wi_row["custom_fields"]
     if custom_fields_update:
@@ -278,8 +300,9 @@ def append_transition_event(
         actor_kind=actor_kind,
         actor_metadata=actor_metadata,
         key_id=key_id,
+        workflow_name=workflow_name,
         workflow_version=workflow_version,
-        timestamp=datetime.now(UTC),
+        timestamp=row["timestamp"],
         transition=transition_name,
         payload=payload,
         payload_canonical_hash=canonical_hash,

@@ -49,6 +49,7 @@ class Event:
     actor_kind: str
     actor_metadata: dict | None
     key_id: str
+    workflow_name: str
     workflow_version: int
     timestamp: datetime
     transition: str | None
@@ -65,6 +66,7 @@ class Event:
             "actor_kind": self.actor_kind,
             "actor_metadata": self.actor_metadata,
             "key_id": self.key_id,
+            "workflow_name": self.workflow_name,
             "workflow_version": self.workflow_version,
             "timestamp": self.timestamp.isoformat(),
             "transition": self.transition,
@@ -83,6 +85,7 @@ class Event:
             actor_kind=data["actor_kind"],
             actor_metadata=data.get("actor_metadata"),
             key_id=data["key_id"],
+            workflow_name=data["workflow_name"],
             workflow_version=data["workflow_version"],
             timestamp=datetime.fromisoformat(data["timestamp"]),
             transition=data.get("transition"),
