@@ -26,7 +26,7 @@ def acquire_claim(
     actor_id: str,
     ttl_seconds: int,
     key_set,
-    idempotency_key: uuid.UUID | None = None,
+    event_id: uuid.UUID | None = None,
 ) -> Claim:
     from ._events import append_event, lock_work_item
 
@@ -112,7 +112,7 @@ def acquire_claim(
         [actor_id, expires_at, work_item_id],
     )
 
-    event_id = idempotency_key or uuid.uuid4()
+    event_id = event_id or uuid.uuid4()
     if prior_actor_id is not None:
         append_event(
             conn=conn,
@@ -150,12 +150,63 @@ def acquire_claim(
             event_id=event_id,
         )
 
+    _check_escalation(conn, wi, attempt_number, key_set)
+
     return Claim(
         work_item_id=work_item_id,
         actor_id=actor_id,
         acquired_at=acquired_at,
         expires_at=expires_at,
         attempt_number=attempt_number,
+    )
+
+
+def _check_escalation(
+    conn: psycopg.Connection,
+    wi: dict,
+    attempt_number: int,
+    key_set,
+) -> None:
+    from ._events import append_event
+
+    wf_row = conn.execute(
+        SQL(
+            "SELECT definition FROM workflow_registry "
+            "WHERE workflow_name = %s AND version = %s"
+        ),
+        [wi["workflow_name"], wi["workflow_version"]],
+    ).fetchone()
+    if wf_row is None:
+        return
+
+    threshold = wf_row["definition"].get("attempt_threshold")
+    if threshold is None or attempt_number < threshold:
+        return
+
+    existing = conn.execute(
+        SQL("SELECT 1 FROM events WHERE work_item_id = %s AND transition = 'escalated'"),
+        [wi["work_item_id"]],
+    ).fetchone()
+    if existing is not None:
+        return
+
+    conn.execute(
+        SQL("UPDATE work_items_current SET needs_review = true WHERE work_item_id = %s"),
+        [wi["work_item_id"]],
+    )
+
+    append_event(
+        conn=conn,
+        work_item_id=wi["work_item_id"],
+        actor_id="system",
+        actor_kind="system",
+        actor_metadata=None,
+        key_set=key_set,
+        workflow_name=wi["workflow_name"],
+        workflow_version=wi["workflow_version"],
+        transition="escalated",
+        payload={"attempt_number": attempt_number, "threshold": threshold},
+        event_id=uuid.uuid4(),
     )
 
 
@@ -221,6 +272,7 @@ def release_claim(
     work_item_id: uuid.UUID,
     actor_id: str,
     key_set,
+    event_id: uuid.UUID | None = None,
 ) -> None:
     from ._events import append_event, lock_work_item
 
@@ -267,7 +319,7 @@ def release_claim(
             workflow_version=wi["workflow_version"],
             transition="claim_released",
             payload={"actor_id": actor_id},
-            event_id=uuid.uuid4(),
+            event_id=event_id or uuid.uuid4(),
         )
 
 

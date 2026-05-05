@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime
 
 import psycopg
 from psycopg.sql import SQL, Identifier
@@ -12,7 +12,7 @@ from ._types import ReplayReport
 _EVENT_FIELDS = (
     "event_id, work_item_id, event_seq, actor_id, actor_kind, "
     "actor_metadata, key_id, workflow_name, workflow_version, "
-    "timestamp, transition, payload, payload_canonical_hash, signature"
+    "timestamp, transition, payload, payload_canonical_hash, signature, canonical_envelope"
 )
 
 
@@ -22,9 +22,22 @@ def replay(
     project: str,
     key_set: KeySet,
 ) -> ReplayReport:
-    ts = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
-    replay_table = f"work_items_current_replay_{ts}"
-    report_table = f"replay_report_{ts}"
+    import uuid as _uuid
+
+    tag = _uuid.uuid4().hex[:8]
+    replay_table = f"work_items_current_replay_{tag}"
+    report_table = f"replay_report_{tag}"
+
+    old_tables = conn.execute(
+        SQL(
+            "SELECT tablename FROM pg_tables WHERE schemaname = %s "
+            "AND (tablename LIKE 'work_items_current_replay_%%' "
+            "OR tablename LIKE 'replay_report_%%')"
+        ),
+        [schema],
+    ).fetchall()
+    for tbl in old_tables:
+        conn.execute(SQL("DROP TABLE IF EXISTS {}").format(Identifier(tbl["tablename"])))
 
     conn.execute(
         SQL(
@@ -177,6 +190,9 @@ def _replay_work_item(
             signature=bytes(evt["signature"]),
             canonical_hash=bytes(evt["payload_canonical_hash"]),
             key=key_entry.secret,
+            stored_envelope=(
+                bytes(evt["canonical_envelope"]) if evt["canonical_envelope"] else None
+            ),
         ):
             raise RuntimeError(
                 f"Signature verification failed for event {evt['event_id']} "
@@ -195,8 +211,11 @@ def _replay_work_item(
             "claim_stolen",
             "claim_released",
             "claim_expired",
+            "hook_dead_lettered",
         ):
             pass
+        elif transition == "escalated":
+            needs_review = True
         elif transition == "not_before_set":
             payload = evt["payload"] or {}
             not_before = _parse_not_before(payload.get("not_before"))

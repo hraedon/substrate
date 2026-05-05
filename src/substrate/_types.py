@@ -56,9 +56,10 @@ class Event:
     payload: dict | None
     payload_canonical_hash: bytes
     signature: bytes
+    canonical_envelope: bytes | None = None
 
     def to_dict(self) -> dict:
-        return {
+        d = {
             "event_id": str(self.event_id),
             "work_item_id": str(self.work_item_id),
             "event_seq": self.event_seq,
@@ -74,6 +75,9 @@ class Event:
             "payload_canonical_hash": self.payload_canonical_hash.hex(),
             "signature": self.signature.hex(),
         }
+        if self.canonical_envelope is not None:
+            d["canonical_envelope"] = self.canonical_envelope.hex()
+        return d
 
     @classmethod
     def from_dict(cls, data: dict) -> Event:
@@ -92,6 +96,11 @@ class Event:
             payload=data.get("payload"),
             payload_canonical_hash=bytes.fromhex(data["payload_canonical_hash"]),
             signature=bytes.fromhex(data["signature"]),
+            canonical_envelope=(
+                bytes.fromhex(data["canonical_envelope"])
+                if data.get("canonical_envelope")
+                else None
+            ),
         )
 
 
@@ -395,13 +404,13 @@ class Link:
 @dataclass(frozen=True)
 class QueryPage(Generic[T]):
     items: list[T]
-    cursor: tuple[int, uuid.UUID] | None
+    cursor: uuid.UUID | None
     has_more: bool
 
     def to_dict(self) -> dict:
         return {
             "items": [item.to_dict() if hasattr(item, "to_dict") else item for item in self.items],
-            "cursor": (self.cursor[0], str(self.cursor[1])) if self.cursor else None,
+            "cursor": str(self.cursor) if self.cursor else None,
             "has_more": self.has_more,
         }
 
@@ -450,4 +459,94 @@ class ReplayReportEntry:
             work_item_id=uuid.UUID(data["work_item_id"]),
             category=data["category"],
             detail=data.get("detail"),
+        )
+
+
+@dataclass(frozen=True)
+class ValidatorContext:
+    work_item_id: uuid.UUID
+    workflow_name: str
+    workflow_version: int
+    work_item_type: str
+    current_state: str
+    new_state: str
+    transition_name: str
+    payload: dict | None
+    custom_fields: dict
+    actor_id: str
+    actor_metadata: dict | None
+
+    def to_dict(self) -> dict:
+        return {
+            "work_item_id": str(self.work_item_id),
+            "workflow_name": self.workflow_name,
+            "workflow_version": self.workflow_version,
+            "work_item_type": self.work_item_type,
+            "current_state": self.current_state,
+            "new_state": self.new_state,
+            "transition_name": self.transition_name,
+            "payload": self.payload,
+            "custom_fields": self.custom_fields,
+            "actor_id": self.actor_id,
+            "actor_metadata": self.actor_metadata,
+        }
+
+
+@dataclass(frozen=True)
+class HookContext:
+    hook_queue_id: int
+    event_id: uuid.UUID
+    work_item_id: uuid.UUID
+    hook_name: str
+    transition: str | None
+    payload: dict | None
+
+    def to_dict(self) -> dict:
+        return {
+            "hook_queue_id": self.hook_queue_id,
+            "event_id": str(self.event_id),
+            "work_item_id": str(self.work_item_id),
+            "hook_name": self.hook_name,
+            "transition": self.transition,
+            "payload": self.payload,
+        }
+
+
+@dataclass(frozen=True)
+class DeadLetterEntry:
+    id: int
+    event_id: uuid.UUID
+    hook_name: str
+    hook_type: str
+    payload: dict | None
+    retry_count: int
+    error_message: str | None
+    dead_lettered_at: datetime
+    original_hook_queue_id: int | None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "event_id": str(self.event_id),
+            "hook_name": self.hook_name,
+            "hook_type": self.hook_type,
+            "payload": self.payload,
+            "retry_count": self.retry_count,
+            "error_message": self.error_message,
+            "dead_lettered_at": self.dead_lettered_at.isoformat(),
+            "original_hook_queue_id": self.original_hook_queue_id,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> DeadLetterEntry:
+        return cls(
+            id=data["id"],
+            event_id=uuid.UUID(data["event_id"]),
+            hook_name=data["hook_name"],
+            hook_type=data["hook_type"],
+            payload=data.get("payload"),
+            retry_count=data["retry_count"],
+            error_message=data.get("error_message"),
+            dead_lettered_at=datetime.fromisoformat(data["dead_lettered_at"]),
+            original_hook_queue_id=data.get("original_hook_queue_id"),
         )

@@ -2,7 +2,7 @@
 number: "017"
 title: Test coverage missing for load-bearing ACs
 severity: high
-status: proposed
+status: implemented
 kind: bug
 author: claude-opus
 date: "2026-05-05"

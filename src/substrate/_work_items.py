@@ -79,10 +79,9 @@ def create_work_item(
     custom_fields: dict | None = None,
     not_before: datetime | None = None,
     event_id: uuid.UUID | None = None,
-    idempotency_key: uuid.UUID | None = None,
 ) -> tuple[WorkItem, Event]:
     if event_id is None:
-        event_id = idempotency_key or uuid.uuid4()
+        event_id = uuid.uuid4()
 
     def_data, version = _load_workflow_definition(conn, workflow_name)
     wf = _rebuild_wf(def_data)
@@ -236,7 +235,7 @@ def query_work_items(
     claimable_now: bool | None = None,
     needs_review: bool | None = None,
     has_link_type: str | None = None,
-    cursor: tuple[int, uuid.UUID] | None = None,
+    cursor: uuid.UUID | None = None,
     page_size: int = 100,
 ) -> QueryPage[WorkItem]:
     page_size = min(max(1, page_size), 1000)
@@ -251,7 +250,7 @@ def query_work_items(
         return "%s"
 
     if cursor is not None:
-        conditions.append(f"(last_event_seq, work_item_id) > ({_ph(cursor[0])}, {_ph(cursor[1])})")
+        conditions.append(f"work_item_id > {_ph(cursor)}")
 
     if workflow_name is not None:
         conditions.append(f"workflow_name = {_ph(workflow_name)}")
@@ -296,7 +295,7 @@ def query_work_items(
     fetch_size = page_size + 1
     sql = (
         f"SELECT {_WORK_ITEM_FIELDS} FROM work_items_current "
-        f"{where} ORDER BY last_event_seq, work_item_id LIMIT {fetch_size}"
+        f"{where} ORDER BY work_item_id LIMIT {fetch_size}"
     )
     rows = conn.execute(SQL(sql), params).fetchall()
 
@@ -307,6 +306,6 @@ def query_work_items(
     next_cursor = None
     if has_more and items:
         last = items[-1]
-        next_cursor = (last.last_event_seq, last.work_item_id)
+        next_cursor = last.work_item_id
 
     return QueryPage(items=items, cursor=next_cursor, has_more=has_more)

@@ -1,0 +1,135 @@
+from __future__ import annotations
+
+import json
+import uuid
+from pathlib import Path
+
+import pytest
+
+from substrate._testing import drop_project_schema, raw_transaction
+
+TESTS_DIR = Path(__file__).parent
+DSN = "postgresql://substrate_test:substrate_test@localhost:5432/substrate_test"
+KEY_PATH = str(TESTS_DIR / "test_keys.json")
+WORKFLOW_PATH = str(TESTS_DIR / "test_workflow.yaml")
+
+
+@pytest.fixture
+def substrate():
+    from substrate import Substrate
+
+    project = f"test_replay_{uuid.uuid4().hex[:8]}"
+    sub = Substrate.create_project(DSN, project, KEY_PATH)
+    sub.register_workflow_file(WORKFLOW_PATH)
+    yield sub
+    sub.close()
+    drop_project_schema(DSN, project)
+
+
+class TestAC17RevokedKeyHaltsReplay:
+    def test_replay_halts_on_revoked_key_event(self, substrate):
+        wi, _ = substrate.create_work_item(
+            workflow_name="test_workflow",
+            work_item_type="feature",
+            actor_id="agent-1",
+            custom_fields={"title": "AC-17 revoked"},
+        )
+
+        events = substrate.read_events(work_item_id=wi.work_item_id)
+        assert len(events) >= 1
+        original_key_id = events[0].key_id
+
+        revoked_key_data = {
+            "keys": [
+                {
+                    "key_id": original_key_id,
+                    "secret": "dGhpcyBpcyBhIHRlc3Qgc2VjcmV0IGtleSBmb3Igc3Vic3RyYXRl",
+                    "status": "revoked",
+                },
+            ]
+        }
+
+        revoked_key_path = TESTS_DIR / f"test_keys_revoked_{uuid.uuid4().hex[:8]}.json"
+        try:
+            revoked_key_path.write_text(json.dumps(revoked_key_data))
+
+            from substrate._keys import KeySet
+
+            revoked_key_set = KeySet(str(revoked_key_path))
+
+            with raw_transaction(substrate) as conn:
+                from substrate._replay import replay as _replay_fn
+
+                report = _replay_fn(conn, substrate._mgr.schema, substrate.project, revoked_key_set)
+                assert report.halted >= 1
+        finally:
+            revoked_key_path.unlink(missing_ok=True)
+
+    def test_replay_report_includes_halted_count(self, substrate):
+        wi, _ = substrate.create_work_item(
+            workflow_name="test_workflow",
+            work_item_type="feature",
+            actor_id="agent-1",
+            custom_fields={"title": "AC-17 halted"},
+        )
+        substrate.transition(
+            wi.work_item_id, "start", "agent-1", actor_metadata={"role": "agent"}
+        )
+
+        report = substrate.replay()
+        assert report.halted >= 0
+        assert report.replayed_ok >= 1
+
+
+class TestAC29OutOfBandEditDrift:
+    def test_direct_state_update_detected_as_drift(self, substrate):
+        wi, _ = substrate.create_work_item(
+            workflow_name="test_workflow",
+            work_item_type="feature",
+            actor_id="agent-1",
+            custom_fields={"title": "AC-29 state drift"},
+        )
+
+        with raw_transaction(substrate) as conn:
+            conn.execute(
+                "UPDATE work_items_current SET current_state = 'done' "
+                "WHERE work_item_id = %s",
+                [wi.work_item_id],
+            )
+
+        report = substrate.replay()
+        assert report.replayed_drift >= 1
+
+    def test_direct_custom_fields_update_detected_as_drift(self, substrate):
+        wi, _ = substrate.create_work_item(
+            workflow_name="test_workflow",
+            work_item_type="feature",
+            actor_id="agent-1",
+            custom_fields={"title": "AC-29 field drift"},
+        )
+
+        with raw_transaction(substrate) as conn:
+            conn.execute(
+                "UPDATE work_items_current SET custom_fields = '{\"title\": \"tampered\"}'::jsonb "
+                "WHERE work_item_id = %s",
+                [wi.work_item_id],
+            )
+
+        report = substrate.replay()
+        assert report.replayed_drift >= 1
+
+    def test_no_drift_after_normal_operations(self, substrate):
+        wi, _ = substrate.create_work_item(
+            workflow_name="test_workflow",
+            work_item_type="feature",
+            actor_id="agent-1",
+            actor_metadata={"role": "agent"},
+            custom_fields={"title": "AC-29 clean"},
+        )
+        substrate.transition(
+            wi.work_item_id, "start", "agent-1", actor_metadata={"role": "agent"}
+        )
+
+        report = substrate.replay()
+        assert report.replayed_drift == 0
+        assert report.halted == 0

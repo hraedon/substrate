@@ -62,6 +62,38 @@ class Metrics:
                 "substrate_workflows_registered_total",
                 "Workflows registered",
             ),
+            "hooks_dispatched": (
+                "substrate_hooks_dispatched_total",
+                "Hooks dispatched",
+            ),
+            "hooks_succeeded": (
+                "substrate_hooks_succeeded_total",
+                "Hooks succeeded",
+            ),
+            "hooks_failed": (
+                "substrate_hooks_failed_total",
+                "Hooks failed",
+            ),
+            "hooks_dead_lettered": (
+                "substrate_hooks_dead_lettered_total",
+                "Hooks dead-lettered",
+            ),
+            "validators_succeeded": (
+                "substrate_validators_succeeded_total",
+                "Validators succeeded",
+            ),
+            "validators_failed": (
+                "substrate_validators_failed_total",
+                "Validators failed",
+            ),
+            "validators_timed_out": (
+                "substrate_validators_timed_out_total",
+                "Validators timed out",
+            ),
+            "escalations": (
+                "substrate_escalations_total",
+                "Escalations",
+            ),
         }
         if name in counters:
             metric_name, doc = counters[name]

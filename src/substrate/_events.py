@@ -14,7 +14,7 @@ from ._types import Event
 _EVENT_FIELDS = (
     "event_id, work_item_id, event_seq, actor_id, actor_kind, "
     "actor_metadata, key_id, workflow_name, workflow_version, "
-    "timestamp, transition, payload, payload_canonical_hash, signature"
+    "timestamp, transition, payload, payload_canonical_hash, signature, canonical_envelope"
 )
 
 
@@ -34,6 +34,7 @@ def _row_to_event(row: dict) -> Event:
         payload=row["payload"],
         payload_canonical_hash=bytes(row["payload_canonical_hash"]),
         signature=bytes(row["signature"]),
+        canonical_envelope=bytes(row["canonical_envelope"]) if row["canonical_envelope"] else None,
     )
 
 
@@ -125,7 +126,7 @@ def append_event(
     next_seq = wi_row["next_event_seq"]
     check_expected_seq(next_seq, expected_event_seq)
 
-    signature, canonical_hash = sign_event(
+    signature, canonical_hash, canonical_envelope = sign_event(
         event_id=event_id,
         work_item_id=work_item_id,
         actor_id=actor_id,
@@ -139,8 +140,8 @@ def append_event(
         SQL(
             "INSERT INTO events (event_id, work_item_id, event_seq, actor_id, actor_kind, "
             "actor_metadata, key_id, workflow_name, workflow_version, "
-            "transition, payload, payload_canonical_hash, signature) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+            "transition, payload, payload_canonical_hash, signature, canonical_envelope) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
             "RETURNING timestamp"
         ),
         [
@@ -157,6 +158,7 @@ def append_event(
             psycopg.types.json.Jsonb(payload) if payload is not None else None,
             canonical_hash,
             signature,
+            canonical_envelope,
         ],
     ).fetchone()
 
@@ -184,6 +186,7 @@ def append_event(
         payload=payload,
         payload_canonical_hash=canonical_hash,
         signature=signature,
+        canonical_envelope=canonical_envelope,
     )
 
 
@@ -221,7 +224,7 @@ def append_transition_event(
     next_seq = wi_row["next_event_seq"]
     check_expected_seq(next_seq, expected_event_seq)
 
-    signature, canonical_hash = sign_event(
+    signature, canonical_hash, canonical_envelope = sign_event(
         event_id=event_id,
         work_item_id=work_item_id,
         actor_id=actor_id,
@@ -238,8 +241,8 @@ def append_transition_event(
         SQL(
             "INSERT INTO events (event_id, work_item_id, event_seq, actor_id, actor_kind, "
             "actor_metadata, key_id, workflow_name, workflow_version, "
-            "transition, payload, payload_canonical_hash, signature) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+            "transition, payload, payload_canonical_hash, signature, canonical_envelope) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
             "RETURNING timestamp"
         ),
         [
@@ -256,6 +259,7 @@ def append_transition_event(
             psycopg.types.json.Jsonb(payload) if payload is not None else None,
             canonical_hash,
             signature,
+            canonical_envelope,
         ],
     ).fetchone()
 
@@ -307,6 +311,7 @@ def append_transition_event(
         payload=payload,
         payload_canonical_hash=canonical_hash,
         signature=signature,
+        canonical_envelope=canonical_envelope,
     )
 
 

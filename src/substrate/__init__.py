@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
@@ -36,10 +37,12 @@ from ._types import (
 )
 from ._types import (
     Claim,
+    DeadLetterEntry,
     Event,
     Link,
     QueryPage,
     ReplayReport,
+    ValidatorContext,
     WorkflowVersion,
     WorkItem,
 )
@@ -77,6 +80,19 @@ class Substrate:
         self._keys = KeySet(hmac_key_path)
         self._metrics = Metrics(registry=prometheus_registry)
         self._project = project
+        self._validators: dict[str, Callable] = {}
+        self._hook_handlers: dict[str, Callable] = {}
+        self._hook_channel = f"substrate_hooks_{self._mgr.schema}"
+        from ._hooks import HookConsumer
+
+        self._hook_consumer = HookConsumer(
+            dsn=self._mgr.dsn,
+            schema=self._mgr.schema,
+            project=project,
+            handlers=self._hook_handlers,
+            key_set=self._keys,
+            metrics=self._metrics,
+        )
         check_integrity(self._mgr)
         log.info("substrate.connected", project=project, substrate_version=SUBSTRATE_VERSION)
 
@@ -107,6 +123,8 @@ class Substrate:
         )
 
     def close(self) -> None:
+        if self._hook_consumer.is_running:
+            self._hook_consumer.stop()
         self._mgr.close()
         log.info("substrate.disconnected", project=self._project)
 
@@ -122,11 +140,29 @@ class Substrate:
     def prometheus_registry(self):
         return self._metrics.registry
 
+    def register_validator(self, name: str, handler: Callable) -> None:
+        self._validators[name] = handler
+
+    def register_hook_handler(self, name: str, handler: Callable) -> None:
+        self._hook_handlers[name] = handler
+
+    def start_hook_consumer(self) -> None:
+        self._hook_consumer.start()
+
+    def stop_hook_consumer(self) -> None:
+        self._hook_consumer.stop()
+
+    def poll_hooks(self) -> int:
+        from ._hooks import poll_and_process_hooks
+
+        with self._mgr.transaction() as conn:
+            return poll_and_process_hooks(
+                conn, self._hook_handlers, self._keys, self._metrics, self._project,
+            )
+
     def register_workflow(
         self,
         yaml_content: str,
-        *,
-        idempotency_key: uuid.UUID | None = None,
     ) -> WorkflowVersion:
         timer = OpTimer(self._project, "register_workflow")
         try:
@@ -171,10 +207,8 @@ class Substrate:
     def register_workflow_file(
         self,
         path: str | Path,
-        *,
-        idempotency_key: uuid.UUID | None = None,
     ) -> WorkflowVersion:
-        return self.register_workflow(Path(path).read_text(), idempotency_key=idempotency_key)
+        return self.register_workflow(Path(path).read_text())
 
     def create_work_item(
         self,
@@ -303,7 +337,8 @@ class Substrate:
 
             with self._mgr.transaction() as conn:
                 wi_row = conn.execute(
-                    "SELECT workflow_name, workflow_version, current_state "
+                    "SELECT workflow_name, workflow_version, current_state, "
+                    "work_item_type, custom_fields "
                     "FROM work_items_current WHERE work_item_id = %s FOR UPDATE",
                     [work_item_id],
                 ).fetchone()
@@ -350,6 +385,41 @@ class Substrate:
 
                 new_state = transition_def["to_state"]
 
+                validator_name = transition_def.get("validator")
+                if validator_name:
+                    handler = self._validators.get(validator_name)
+                    if handler is not None:
+                        from ._hooks import run_validator
+
+                        ctx = ValidatorContext(
+                            work_item_id=work_item_id,
+                            workflow_name=wi_row["workflow_name"],
+                            workflow_version=wi_row["workflow_version"],
+                            work_item_type=wi_row["work_item_type"],
+                            current_state=wi_row["current_state"],
+                            new_state=new_state,
+                            transition_name=transition_name,
+                            payload=payload,
+                            custom_fields=wi_row["custom_fields"] or {},
+                            actor_id=actor_id,
+                            actor_metadata=actor_metadata,
+                        )
+                        try:
+                            run_validator(validator_name, handler, ctx)
+                            self._metrics.inc("validators_succeeded", self._project)
+                        except SubstrateError as e:
+                            if e.code == ErrorCode.VALIDATOR_TIMEOUT:
+                                self._metrics.inc("validators_timed_out", self._project)
+                            else:
+                                self._metrics.inc("validators_failed", self._project)
+                            raise
+                    else:
+                        log.warning(
+                            "validator.not_registered",
+                            validator=validator_name,
+                            transition=transition_name,
+                        )
+
                 evt = _append_transition_event(
                     conn,
                     work_item_id=work_item_id,
@@ -365,6 +435,21 @@ class Substrate:
                     custom_fields_update=custom_fields,
                     release_claim=True,
                 )
+
+                hook_names = transition_def.get("hooks", [])
+                if hook_names:
+                    from ._hooks import enqueue_hooks
+
+                    enqueue_hooks(
+                        conn,
+                        event_id=evt.event_id,
+                        work_item_id=work_item_id,
+                        hook_names=hook_names,
+                        transition=transition_name,
+                        event_payload=payload,
+                        channel=self._hook_channel,
+                    )
+                    self._metrics.inc("hooks_dispatched", self._project, amount=len(hook_names))
 
             self._metrics.inc("events_appended", self._project)
             self._metrics.inc("transitions_accepted", self._project)
@@ -409,7 +494,7 @@ class Substrate:
         claimable_now: bool | None = None,
         needs_review: bool | None = None,
         has_link_type: str | None = None,
-        cursor: tuple[int, uuid.UUID] | None = None,
+        cursor: uuid.UUID | None = None,
         page_size: int = 100,
     ) -> QueryPage[WorkItem]:
         from ._work_items import query_work_items as _query
@@ -441,7 +526,7 @@ class Substrate:
         actor_id: str,
         ttl_seconds: int = 300,
         *,
-        idempotency_key: uuid.UUID | None = None,
+        event_id: uuid.UUID | None = None,
     ) -> Claim:
         from ._claims import acquire_claim as _acquire
 
@@ -450,10 +535,15 @@ class Substrate:
             with self._mgr.transaction() as conn:
                 claim = _acquire(
                     conn, work_item_id, actor_id, ttl_seconds,
-                    self._keys, idempotency_key,
+                    self._keys, event_id,
                 )
 
             self._metrics.inc("claims_acquired", self._project)
+
+            refreshed = self.get_work_item(work_item_id)
+            if refreshed is not None and refreshed.needs_review:
+                self._metrics.inc("escalations", self._project)
+
             timer.log("ok", work_item_id=str(work_item_id))
             return claim
         except SubstrateError as e:
@@ -491,13 +581,15 @@ class Substrate:
         self,
         work_item_id: uuid.UUID,
         actor_id: str,
+        *,
+        event_id: uuid.UUID | None = None,
     ) -> None:
         from ._claims import release_claim as _release
 
         timer = OpTimer(self._project, "release_claim")
         try:
             with self._mgr.transaction() as conn:
-                _release(conn, work_item_id, actor_id, self._keys)
+                _release(conn, work_item_id, actor_id, self._keys, event_id)
 
             self._metrics.inc("claims_released", self._project)
             timer.log("ok", work_item_id=str(work_item_id))
@@ -522,7 +614,7 @@ class Substrate:
         actor_kind: str = "agent",
         actor_metadata: dict | None = None,
         *,
-        idempotency_key: uuid.UUID | None = None,
+        event_id: uuid.UUID | None = None,
     ) -> Link:
         from ._links import create_link as _create
 
@@ -538,7 +630,7 @@ class Substrate:
                     actor_kind=actor_kind,
                     actor_metadata=actor_metadata,
                     key_set=self._keys,
-                    idempotency_key=idempotency_key,
+                    event_id=event_id,
                 )
 
             self._metrics.inc("links_created", self._project)
@@ -557,7 +649,7 @@ class Substrate:
         actor_kind: str = "agent",
         actor_metadata: dict | None = None,
         *,
-        idempotency_key: uuid.UUID | None = None,
+        event_id: uuid.UUID | None = None,
     ) -> None:
         from ._links import remove_link as _remove
 
@@ -573,7 +665,7 @@ class Substrate:
                     actor_kind=actor_kind,
                     actor_metadata=actor_metadata,
                     key_set=self._keys,
-                    idempotency_key=idempotency_key,
+                    event_id=event_id,
                 )
 
             self._metrics.inc("links_removed", self._project)
@@ -603,3 +695,53 @@ class Substrate:
         except Exception:
             timer.log("error")
             raise
+
+    def requeue_dead_lettered_hook(self, dead_letter_id: int) -> None:
+        from ._hooks import requeue_dead_lettered_hook as _requeue
+
+        timer = OpTimer(self._project, "requeue_dead_lettered_hook")
+        try:
+            with self._mgr.transaction() as conn:
+                _requeue(conn, dead_letter_id, self._hook_channel, self._keys)
+
+            timer.log("ok", detail=str(dead_letter_id))
+        except SubstrateError:
+            timer.log("error")
+            raise
+
+    def list_dead_lettered_hooks(self) -> list[DeadLetterEntry]:
+        from psycopg.sql import SQL
+
+        with self._mgr.transaction() as conn:
+            rows = conn.execute(
+                SQL(
+                    "SELECT id, event_id, hook_name, hook_type, payload, "
+                    "retry_count, error_message, dead_lettered_at, "
+                    "original_hook_queue_id "
+                    "FROM hook_dead_letter ORDER BY dead_lettered_at DESC"
+                ),
+            ).fetchall()
+
+        return [
+            DeadLetterEntry(
+                id=r["id"],
+                event_id=r["event_id"],
+                hook_name=r["hook_name"],
+                hook_type=r["hook_type"],
+                payload=r["payload"],
+                retry_count=r["retry_count"],
+                error_message=r["error_message"],
+                dead_lettered_at=r["dead_lettered_at"],
+                original_hook_queue_id=r.get("original_hook_queue_id"),
+            )
+            for r in rows
+        ]
+
+    @staticmethod
+    def validate_actor_metadata(
+        event: Event,
+        expected_schema: dict | None = None,
+    ) -> list[str]:
+        from ._lint import validate_actor_metadata as _validate
+
+        return _validate(event, expected_schema)

@@ -2,7 +2,7 @@
 number: "008"
 title: Signing scheme does not deliver jsonb-drift survival promised by FR-15
 severity: high
-status: proposed
+status: resolved
 kind: design
 author: claude-opus
 date: "2026-05-05"

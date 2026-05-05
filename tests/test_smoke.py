@@ -5,20 +5,23 @@ from pathlib import Path
 
 import pytest
 
+from substrate._testing import drop_project_schema
+
 TESTS_DIR = Path(__file__).parent
 DSN = "postgresql://substrate_test:substrate_test@localhost:5432/substrate_test"
 KEY_PATH = str(TESTS_DIR / "test_keys.json")
 WORKFLOW_PATH = str(TESTS_DIR / "test_workflow.yaml")
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def substrate():
     from substrate import Substrate
 
-    project = f"test_{uuid.uuid4().hex[:8]}"
+    project = f"test_smoke_{uuid.uuid4().hex[:8]}"
     sub = Substrate.create_project(DSN, project, KEY_PATH)
     yield sub
     sub.close()
+    drop_project_schema(DSN, project)
 
 
 class TestWorkflow:
@@ -125,9 +128,12 @@ class TestTransition:
 
     def test_full_lifecycle(self, substrate):
         wi = self._create_feature(substrate)
-        substrate.transition(wi.work_item_id, "start", "agent-1", actor_metadata={"role": "agent"})
-        substrate.transition(wi.work_item_id, "submit_review", "agent-1", actor_metadata={"role": "agent"})
-        substrate.transition(wi.work_item_id, "approve", "reviewer-1", actor_metadata={"role": "reviewer"})
+        substrate.transition(wi.work_item_id, "start", "agent-1",
+                             actor_metadata={"role": "agent"})
+        substrate.transition(wi.work_item_id, "submit_review", "agent-1",
+                             actor_metadata={"role": "agent"})
+        substrate.transition(wi.work_item_id, "approve", "reviewer-1",
+                             actor_metadata={"role": "reviewer"})
 
         refreshed = substrate.get_work_item(wi.work_item_id)
         assert refreshed.current_state == "done"

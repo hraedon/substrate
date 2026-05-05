@@ -27,13 +27,13 @@ related: ["002", "003"]
 
 ## Open
 
-| # | Title | Severity | Tags |
+| # | Title | Severity | Status |
 |---|---|---|---|
-| 007 | [idempotency_key parameter accepted but ignored on several mutations](007-unwired-idempotency-keys.md) | medium | idempotency, br-12 |
-| 008 | [Signing scheme does not deliver jsonb-drift survival promised by FR-15](008-signing-scheme-jsonb-drift.md) | high | signing, fr-15, ac-26, spec-ambiguity |
-| 009 | [JCS implementation has edge-case correctness gaps](009-jcs-edge-cases.md) | medium | signing, jcs, audit |
-| 016 | [Pagination over moving last_event_seq target can skip or duplicate](016-pagination-moving-target.md) | low | query, fr-05b |
-| 017 | [Test coverage missing for load-bearing ACs](017-test-coverage-load-bearing-acs.md) | high | testing, ac-17, ac-24, ac-26, ac-28, ac-29, ac-33, ac-34 |
+| 009 | JCS edge cases | medium | implemented (rfc8785 library), held open for edge-case testing |
+| 016 | Pagination moving target | low | resolved (stable work_item_id cursor), held open for AC coverage |
+| 017 | Test coverage for load-bearing ACs | high | implemented (22 tests), held open for Phase 2 AC coverage |
+| 020 | Escalation metric placement requires extra DB read | low | proposed |
+| 021 | Hook consumer swallows all exceptions, no reconnect | medium | proposed |
 
 ## Resolved
 
@@ -45,9 +45,10 @@ related: ["002", "003"]
 | 004 | Idempotency silently accepts different payloads under same event_id | medium | [resolved/004](resolved/004-idempotency-silent-mismatch.md) |
 | 005 | Claim mutations do not emit events | high | [resolved/005](resolved/005-claims-emit-no-events.md) |
 | 006 | Heartbeat does not check attempt_number for stolen-by-self | medium | [resolved/006](resolved/006-heartbeat-attempt-number.md) |
-| 010 | append_event allows arbitrary transition strings, bypassing FR-11/FR-12 | high | [resolved/010](resolved/010-append-event-bypasses-validation.md) |
-| 011 | Event dataclass missing workflow_name field | low | [resolved/011](resolved/011-event-missing-workflow-name.md) |
-| 012 | Event.timestamp returned to caller differs from server-side stored value | low | [resolved/012](resolved/012-event-timestamp-mismatch.md) |
-| 013 | has_link_type filter does not account for link_removed events | medium | [resolved/013](resolved/013-has-link-type-ignores-removal.md) |
-| 014 | remove_link does not validate that the link exists | low | [resolved/014](resolved/014-remove-link-no-existence-check.md) |
-| 015 | Replay matches transitions by name only, not (name, from_state) | medium | [resolved/015](resolved/015-replay-name-only-match.md) |
+| 007 | idempotency_key parameter accepted but ignored on several mutations | medium | Hybrid: dropped from register_workflow (natural key on name,version); renamed to event_id on acquire_claim/release_claim/create_link/remove_link; all wired through to _events.append dedup |
+| 008 | Signing scheme does not deliver jsonb-drift survival promised by FR-15 | high | Option A: spec FR-15 amended to store canonical envelope bytes; added canonical_envelope BYTEA column; verify_event uses stored bytes, not jsonb re-serialization. AC-26 test now non-vacuous |
+| 009 | JCS implementation has edge-case correctness gaps | medium | Swapped in `rfc8785` library (PyPI) replacing hand-rolled implementation |
+| 016 | Pagination over moving last_event_seq target can skip or duplicate | low | Changed to stable cursor by `work_item_id` only; cleaned cursor type to `uuid.UUID` |
+| 017 | Test coverage missing for load-bearing ACs | high | Added 22 tests across 5 new test files covering AC-17, AC-24, AC-25, AC-26, AC-28, AC-29, AC-33, AC-34 |
+| 018 | Tests reach into private _mgr attribute for out-of-band SQL | low | Created `substrate._testing` module centralizing `_mgr` coupling; all test files import from it |
+| 019 | Session-scoped smoke test fixture accumulates state across tests | low | Switched to module-scoped fixture with DROP SCHEMA teardown via `_testing.drop_project_schema`, matching pattern in other test files |

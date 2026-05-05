@@ -2,7 +2,7 @@
 number: "016"
 title: Pagination over moving last_event_seq target can skip or duplicate
 severity: low
-status: proposed
+status: implemented
 kind: design
 author: claude-opus
 date: "2026-05-05"

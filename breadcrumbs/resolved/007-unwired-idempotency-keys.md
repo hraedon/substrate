@@ -2,7 +2,7 @@
 number: "007"
 title: idempotency_key parameter accepted but ignored on several mutations
 severity: medium
-status: proposed
+status: resolved
 kind: bug
 author: claude-opus
 date: "2026-05-05"

@@ -2,7 +2,7 @@
 number: "009"
 title: JCS implementation has edge-case correctness gaps for floats and supplementary chars
 severity: medium
-status: proposed
+status: implemented
 kind: bug
 author: claude-opus
 date: "2026-05-05"

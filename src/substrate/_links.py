@@ -59,10 +59,9 @@ def create_link(
     actor_metadata: dict | None,
     key_set: KeySet,
     event_id: uuid.UUID | None = None,
-    idempotency_key: uuid.UUID | None = None,
 ) -> Link:
     if event_id is None:
-        event_id = idempotency_key or uuid.uuid4()
+        event_id = uuid.uuid4()
 
     ids = sorted([from_work_item_id, to_work_item_id])
     rows = conn.execute(
@@ -138,10 +137,9 @@ def remove_link(
     actor_metadata: dict | None,
     key_set: KeySet,
     event_id: uuid.UUID | None = None,
-    idempotency_key: uuid.UUID | None = None,
 ) -> None:
     if event_id is None:
-        event_id = idempotency_key or uuid.uuid4()
+        event_id = uuid.uuid4()
 
     ids = sorted([from_work_item_id, to_work_item_id])
     rows = conn.execute(

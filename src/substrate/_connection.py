@@ -36,6 +36,7 @@ class ConnectionManager:
         pool_min: int = 1,
         pool_max: int = 10,
     ) -> None:
+        self._dsn = dsn
         self._schema = validate_project_name(project)
         self._project = project
         self._pool = ConnectionPool(
@@ -46,6 +47,10 @@ class ConnectionManager:
             configure=_configure_session,
             kwargs={"row_factory": dict_row},
         )
+
+    @property
+    def dsn(self) -> str:
+        return self._dsn
 
     @property
     def project(self) -> str:

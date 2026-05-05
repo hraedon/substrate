@@ -4,6 +4,35 @@ Structured log of development sessions and milestones.
 
 ---
 
+## 2026-05-05 — Session 3: Phase 2 implementation
+
+**Focus:** Implement all Phase 2 FRs (FR-10 escalation, FR-13 hooks/validators, FR-14 dead-letter requeue, FR-18 lint helper)
+
+**Context:** MVP was complete with 43 passing tests across 6 test files. User asked to implement the next phase. Discussed scope — all four Phase 2 FRs in dependency order. Phase 2 adds reactivity (hooks, validators) and tooling (lint, dead-letter requeue) once consumers exist.
+
+**Delivered:**
+- **FR-10** — Escalation: `_check_escalation()` in `_claims.py` triggers on claim acquire when `attempt_number >= attempt_threshold`; sets `needs_review = true` on `work_items_current`; emits `escalated` event; idempotent via existence check under canonical lock; partial unique index `idx_events_one_escalated` as safety net
+- **FR-13** — Hooks & Validators: New `_hooks.py` module with sync validator execution (5s timeout via ThreadPoolExecutor), async hook enqueue into `hook_queue` with NOTIFY, background `HookConsumer` thread with LISTEN + 30s polling, retry with exponential backoff, dead-letter move after max retries with `hook_dead_lettered` event emission
+- **FR-14** — Dead-letter requeue: `requeue_dead_lettered_hook()` moves entry from `hook_dead_letter` back to `hook_queue` with reset retry count; re-notifies consumer
+- **FR-18** — Lint helper: `_lint.py` with `validate_actor_metadata()` checking recommended fields (model, provider, role_source), role_source value validation, and optional JSON Schema conformance
+
+**Infrastructure changes:**
+- Migration `003_escalation_idempotency.sql` — unique partial index on events for escalated transition
+- `_connection.py` — stores DSN, exposes `dsn` property for hook consumer's dedicated connection
+- `_errors.py` — added `HOOK_NOT_FOUND`, `HOOK_NOT_DEAD_LETTERED`
+- `_types.py` — added `ValidatorContext`, `HookContext`, `DeadLetterEntry`
+- `_observability.py` — added 9 new metrics counters (hooks_dispatched/succeeded/failed/dead_lettered, validators_succeeded/failed/timed_out, escalations)
+- `_replay.py` — handles `escalated` (sets needs_review) and `hook_dead_lettered` transitions
+- `__init__.py` — 8 new public methods: `register_validator()`, `register_hook_handler()`, `start_hook_consumer()`, `stop_hook_consumer()`, `poll_hooks()`, `requeue_dead_lettered_hook()`, `list_dead_lettered_hooks()`, `validate_actor_metadata()`
+
+**Breadcrumbs raised:** BC-020 (escalation metric placement), BC-021 (hook consumer NOTIFY error handling)
+
+**Test Results:** 61 passed (43 existing + 18 new) in 21.25s
+
+**Lint:** 0 errors (ruff)
+
+---
+
 ## 2026-05-05 — Session 2 with glm-5.1 (opencode)
 
 **Focus:** Resolve breadcrumbs across replay, claims, idempotency, links, and API surface

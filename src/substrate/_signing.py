@@ -43,11 +43,11 @@ def sign_event(
     transition: str | None,
     payload: dict | None,
     key: bytes,
-) -> tuple[bytes, bytes]:
+) -> tuple[bytes, bytes, bytes]:
     envelope = build_signing_envelope(event_id, work_item_id, actor_id, transition, payload)
     signature = compute_hmac(envelope, key)
     canonical_hash = compute_canonical_hash(envelope)
-    return (signature, canonical_hash)
+    return (signature, canonical_hash, envelope)
 
 
 def verify_event(
@@ -59,8 +59,12 @@ def verify_event(
     signature: bytes,
     canonical_hash: bytes,
     key: bytes,
+    stored_envelope: bytes | None = None,
 ) -> bool:
-    envelope = build_signing_envelope(event_id, work_item_id, actor_id, transition, payload)
+    if stored_envelope is not None:
+        envelope = stored_envelope
+    else:
+        envelope = build_signing_envelope(event_id, work_item_id, actor_id, transition, payload)
     if not verify_hmac(envelope, signature, key):
         return False
     if hashlib.sha256(envelope).digest() != canonical_hash:
