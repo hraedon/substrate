@@ -1,0 +1,420 @@
+# spec.yaml — substrate
+# Machine-readable sidecar to spec.md. Source of truth is spec.md.
+# Regenerated against spec.md v3 (2026-05-05).
+
+meta:
+  name: "substrate"
+  spec_level: 3
+  desired_level: 3
+  date: "2026-05-05"
+  extensions: []
+  spec_md_version: 3
+  yaml_regenerated_against: 3
+
+# ---------------------------------------------------------------------------
+# Glossary
+# ---------------------------------------------------------------------------
+
+glossary:
+  - term: "Substrate"
+    definition: "Library + Postgres schema + protocol providing coordination and durable state for agent pipelines. Library deployment; one substrate instance per project."
+  - term: "Project"
+    definition: "Logical unit of related work; corresponds 1:1 to one Postgres database. Hosts one or more workflow definitions."
+  - term: "Workflow"
+    definition: "Named, versioned declarative state machine describing how a particular kind of work proceeds. A project may register many workflows."
+  - term: "Workflow definition"
+    definition: "YAML file (validated against substrate's JSON Schema) declaring states, transitions, role-gating, custom fields per work-item-type, link types, attempt threshold, and per-hook retry overrides."
+  - term: "Work-item"
+    definition: "Discrete unit of trackable work. Has workflow, work-item-type, current state, custom fields, links, needs_review flag, not_before timestamp."
+  - term: "Work-item-type"
+    definition: "Category within a workflow declaring its own custom fields and allowed link types."
+  - term: "Event"
+    definition: "Immutable record appended to the per-project event log describing what happened to a work-item. Authoritative history."
+  - term: "Actor"
+    definition: "Identified entity that performs operations. Has actor_id, actor_kind (agent/human/system), and optional actor_metadata jsonb."
+  - term: "Claim"
+    definition: "Durable lease an actor holds on a work-item. Has TTL, attempt number, explicit release."
+  - term: "Hook"
+    definition: "Side effect dispatched on transitions. Sync hooks gate transaction; async hooks queued and dispatched at-least-once."
+  - term: "Link"
+    definition: "Typed directed reference between work-items in the same project. Created and removed via events."
+  - term: "Workflow version"
+    definition: "Registered, immutable instance of a workflow definition. Work-items pin the version they were created against."
+  - term: "Reasoning log"
+    definition: "Existing flat-file convention in the Software Factory. Continues to operate alongside the substrate."
+
+# ---------------------------------------------------------------------------
+# Scope
+# ---------------------------------------------------------------------------
+
+scope:
+  in_scope:
+    - "Core schema: work-items, events, claims, actors, links"
+    - "Per-project Postgres database isolation (one DB per project)"
+    - "Workflow definition format (YAML + JSON Schema), parsing, semantic validation, versioned registry"
+    - "Claim lifecycle: acquire, heartbeat/renew, release, expire, auto-steal with attempt tracking"
+    - "Transactional event append + denormalized current-state update"
+    - "Event log read with structured query shapes"
+    - "Structured work-item query against work_items_current (FR-05b): filterable, paginated, indexed"
+    - "Replay: rebuild current-state projection from event log into a fresh table"
+    - "Sync and async hook dispatch (transition validators: in-transaction, gate commit, no I/O; async hooks via durable queue + LISTEN/NOTIFY + always-on polling)"
+    - "Pluggable actor identity verifier (HMAC-SHA256 default; RFC 8785 canonical signing envelope; OIDC-ready)"
+    - "Key rotation via key-set-with-status (active/deprecated/revoked); hot-reload via mtime polling"
+    - "Startup integrity check (migrations applied; workflow-substrate version compatibility)"
+    - "Structured logging + Prometheus metrics (library-mode CollectorRegistry, not HTTP server)"
+    - "Concurrency contract: canonical lock target, gap-free event_seq allocator, cross-work-item deadlock prevention"
+    - "Projection invariants: work_items_current fully derived from events, drift detection via replay report"
+    - "API-layer idempotency: client-supplied UUIDv4 on every mutation; event_id doubles as key for event append"
+    - "Public API surface (section 19): protocol, not Postgres connection; library is sole signer; service-wrapping is mechanical"
+    - "Consumer expectation boundary (section 20): explicit enumeration of what substrate does NOT do"
+  out_of_scope:
+    - "Cross-project state, queries, or links"
+    - "DB provisioning (operator creates DB; substrate runs migrations)"
+    - "Disk-level durability and backups"
+    - "Scheduling beyond not_before timestamp"
+    - "Retry / SLA / automation engines layered above coordination"
+    - "Workflow file composition across files (deferred)"
+    - "Notification / paging / email"
+    - "Human-facing UI"
+    - "Removal of registered workflow versions (registry is append-only)"
+
+# ---------------------------------------------------------------------------
+# MVP Definition
+# ---------------------------------------------------------------------------
+
+mvp:
+  description: "Substrate library replaces reasoning.log for one Software Factory workflow: agents create work-items in a declared workflow, claim them durably, transition them through validated states with role-gating, with full event history and replay. Structured work-item query (FR-05b) enables claim-discovery and future UI list views without reaching into work_items_current directly."
+      fr_ids:
+        - "FR-01"
+        - "FR-02"
+        - "FR-03"
+        - "FR-04"
+        - "FR-05"
+        - "FR-05b"
+        - "FR-06"
+        - "FR-07"
+        - "FR-08"
+        - "FR-09a"
+        - "FR-09b"
+        - "FR-11"
+        - "FR-12"
+        - "FR-15"
+        - "FR-16"
+        - "FR-17"
+        - "FR-19"
+        - "FR-20"
+        - "FR-21"
+        - "FR-22"
+        - "FR-23"
+      rationale: "Substrate replaces reasoning.log for one Software Factory workflow with durable claims, role enforcement, structured work-item discovery, replay, observability."
+    - phase: 2
+      label: "Fast-follow"
+      fr_ids:
+        - "FR-10"
+        - "FR-13"
+        - "FR-14"
+        - "FR-18"
+      rationale: "Adds reactivity and tooling once consumers exist."
+    - phase: 3
+      label: "Future"
+      fr_ids: []
+      rationale: "Federated UI, OIDC verifier, actor → allowed_roles, workflow file composition, month-partitioning, --continue-on-revoked replay flag."
+
+  dependency_hints:
+    - fr_id: "FR-02"
+      requires: ["FR-17", "FR-15"]
+      parallel_with: []
+    - fr_id: "FR-03"
+      requires: ["FR-15"]
+      parallel_with: []
+    - fr_id: "FR-04"
+      requires: ["FR-03"]
+      parallel_with: []
+    - fr_id: "FR-05"
+      requires: ["FR-03"]
+      parallel_with: []
+    - fr_id: "FR-05b"
+      requires: ["FR-04"]
+      parallel_with: ["FR-05"]
+    - fr_id: "FR-06"
+      requires: ["FR-15", "FR-17", "FR-05b"]
+      parallel_with: []
+    - fr_id: "FR-07"
+      requires: ["FR-06"]
+      parallel_with: []
+    - fr_id: "FR-08"
+      requires: ["FR-06"]
+      parallel_with: []
+    - fr_id: "FR-09a"
+      requires: ["FR-06"]
+      parallel_with: []
+    - fr_id: "FR-09b"
+      requires: ["FR-06", "FR-09a"]
+      parallel_with: []
+    - fr_id: "FR-11"
+      requires: ["FR-17"]
+      parallel_with: []
+    - fr_id: "FR-12"
+      requires: ["FR-17", "FR-11"]
+      parallel_with: []
+    - fr_id: "FR-16"
+      requires: ["FR-03", "FR-04", "FR-17"]
+      parallel_with: []
+    - fr_id: "FR-20"
+      requires: ["FR-17"]
+      parallel_with: []
+    - fr_id: "FR-22"
+      requires: ["FR-17", "FR-03"]
+      parallel_with: []
+    - fr_id: "FR-23"
+      requires: ["FR-22"]
+      parallel_with: []
+
+# ---------------------------------------------------------------------------
+# Open Questions
+# ---------------------------------------------------------------------------
+
+open_questions:
+  - question: "Workflow file composition (!include / cross-file merge)"
+    category: "cheap_to_change"
+    owner: "Implementing agent (additive when needed)"
+  - question: "Substrate library version → Postgres major version compatibility matrix"
+    category: "needs_research"
+    owner: "Implementing agent (resolved during build)"
+  - question: "Per-hook retry override defaults — what's the right per-hook tuning?"
+    category: "cheap_to_change"
+    owner: "Project authors at use time"
+  - question: "Actor → allowed_roles enforcement"
+    category: "cheap_to_change"
+    owner: "Operator — fast-follow when threat model warrants"
+  - question: "Disk-level durability / backup policy"
+    category: "out_of_scope"
+    owner: "Operator"
+  - question: "Real scheduler beyond not_before timestamp"
+    category: "cheap_to_change"
+    owner: "Future scope"
+  - question: "--continue-on-revoked replay flag"
+    category: "cheap_to_change"
+    owner: "Operator tooling, deferred"
+  - question: "Domain-expert review for distributed-systems correctness (event-sourcing, durability, concurrency)"
+    category: "resolved"
+    owner: "Resolved 2026-05-05 — two-reviewer correctness pass completed. Findings integrated into spec v2."
+
+# ---------------------------------------------------------------------------
+# Assumptions
+# ---------------------------------------------------------------------------
+
+assumptions:
+  - assumption: "Postgres is available on homelab K3s and provides standard ACID semantics"
+    rationale: "Stated explicitly in vibe spec"
+  - assumption: "Operator runs all agents and trusts them not to misdeclare role at MVP"
+    rationale: "Documented threat model boundary; fast-follow when warranted (BR-09)"
+  - assumption: "Workflow files authored by operator (not untrusted parties)"
+    rationale: "Homelab single-operator context; YAML parsing safety follows"
+  - assumption: "License-cost-bound but token-spend unconstrained — substrate may be liberal with logging detail and event payload size"
+    rationale: "Stated explicitly in vibe spec"
+  - assumption: "Federated UI is downstream and adapts to substrate's contract, not vice versa"
+    rationale: "Vibe spec frames UI as future; substrate is authoritative source"
+  - assumption: "Python is acceptable as substrate's implementation language for MVP"
+    rationale: "Existing factory is Python; Q1 answer 'library; if non-Python needed, trivial to migrate' implies acceptance"
+
+# ---------------------------------------------------------------------------
+# Implementation Notes (factory-populated post-hoc; empty at synthesis)
+# ---------------------------------------------------------------------------
+
+implementation_notes: []
+
+# ---------------------------------------------------------------------------
+# Security Configuration
+# ---------------------------------------------------------------------------
+
+security:
+  gate_enabled: true
+  block_severities:
+    - "critical"
+    - "high"
+  ignore_patterns: []
+  max_file_size_mb: 10
+
+# ---------------------------------------------------------------------------
+# Agent Configuration
+# ---------------------------------------------------------------------------
+
+agents:
+  default_role: implementer
+  roles:
+    implementer: {}
+    reviewer: {}
+    architect: {}
+
+# ---------------------------------------------------------------------------
+# Telemetry
+# ---------------------------------------------------------------------------
+
+telemetry:
+  enabled: true
+  metrics:
+    - "duration"
+    - "cost"
+    - "memory_usage"
+    - "test_results"
+    - "retry_count"
+  dashboard:
+    auto_generate: true
+    output_format: "html"
+    retention_days: 30
+
+# ---------------------------------------------------------------------------
+# Budget
+# ---------------------------------------------------------------------------
+
+budget:
+  total_max_usd: 100.0
+  phase_limits: {}
+  alert_threshold: 0.8
+  circuit_breaker: true
+
+# ---------------------------------------------------------------------------
+# Deployment
+# ---------------------------------------------------------------------------
+
+deployment:
+  defaults:
+    docker: true
+    kubernetes: "auto"
+    readme_style: "github"
+    auto_enable_conditions:
+      - when: "web_service"
+        enable: ["docker", "kubernetes"]
+      - when: "cli_tool"
+        enable: ["docker"]
+      - when: "library"
+        enable: []
+  constraints:
+    - type: "stateful_service"
+      service: "postgres"
+      image: "postgres:15"
+      ports:
+        "5432": "5432"
+      env:
+        POSTGRES_USER: "substrate_test"
+        POSTGRES_PASSWORD: "substrate_test"
+        POSTGRES_DB: "substrate_test"
+  smoke_tests:
+    http_endpoints: []
+    file_checks: []
+    command_checks: []
+
+# ---------------------------------------------------------------------------
+# Handoff State
+# ---------------------------------------------------------------------------
+
+handoff:
+  decisions_made:
+    - decision: "Library deployment, in-process Postgres calls"
+      rationale: "Simplest, matches per-project isolation. Sidecar migration is additive if non-Python actors arrive."
+    - decision: "Hybrid persistence: events authoritative, work_items_current transactionally projected"
+      rationale: "Single Postgres transaction per state change. Fast reads + intact history + rebuildable projection. Avoids pure event-sourcing's per-read replay cost."
+    - decision: "Postgres-only coordination; substrate is not a durable execution engine"
+      rationale: "Keeps substrate small. Temporal-style orchestration is project-layered concern using substrate as durable state record."
+    - decision: "Per-project DB isolation; one DB per project; multiple workflows per DB"
+      rationale: "Hardest wall, cleanest backup/restore, no cross-project query accidents. Operator provisions DB; substrate runs migrations."
+    - decision: "Workflow files versioned in per-project registry; immutable once referenced; work-items pin version; replay validates against historical versions"
+      rationale: "Allows non-additive workflow changes (rename state, remove transition) safely. In-flight work continues on its pinned version."
+    - decision: "Custom fields per-workflow-per-work-item-type with declared types and ui_visible flag (default false)"
+      rationale: "Avoids Jira-style global custom-field bloat. Project designer opts in to UI visibility."
+    - decision: "Side effects via hooks: sync (5s default timeout, gates transaction) or async (queue + LISTEN/NOTIFY + always-on polling)"
+      rationale: "Sync for must-gate-transition cases; async-default for everything else; polling is correctness mechanism, NOTIFY is latency optimization."
+    - decision: "Identity via pluggable verifier; HMAC default with key-set-with-status; events carry key_id; OIDC-ready"
+      rationale: "Minimal infra today (HMAC + K3s Secret), maximum flexibility tomorrow (any IdP maps to same actor_id)."
+    - decision: "Postgres now() time authority; per-work-item event_seq for total ordering"
+      rationale: "Same-transaction events share timestamp (correct); event_seq disambiguates within work-item for replay determinism."
+    - decision: "Links are events (link_created / link_removed); current links derived; cross-project links unsupported"
+      rationale: "Composes with replay correctness; link history preserved in audit trail."
+    - decision: "Substrate does not retry on connection failure; surfaces error to caller"
+      rationale: "Substrate doesn't know if a write is safe to retry; that decision belongs to caller with idempotency context."
+    - decision: "Workflow registry append-only; no removal primitive"
+      rationale: "Operator-level removal is operator's responsibility; orphaned references caught at next replay."
+    - decision: "Dead-letter is quarantine, not graveyard; requeue_dead_lettered_hook(id) primitive"
+      rationale: "Failed hooks should be replayable when underlying issue is fixed."
+    - decision: "Replay outputs fresh projection table; operator decides swap vs. diff"
+      rationale: "Composes with 'verify event log is source of truth' use case; replay is verification/recovery, not hot-path."
+    - decision: "Concurrency contract: canonical lock target = work_items_current row; READ COMMITTED + row lock; gap-free per-work-item event_seq allocator"
+      rationale: "Single canonical serialization mechanism for per-work-item state; prevents multiple agents inferring incompatible locking strategies."
+    - decision: "Projection invariant: work_items_current fully derived from events; no out-of-band updates; drift detected via FR-16 replay report"
+      rationale: "Events are authoritative; projection is a transactionally-consistent denormalization. Direct mutation outside substrate API is a contract violation detectable by replay."
+    - decision: "API-layer idempotency: client-supplied UUIDv4 on every mutation; event_id doubles as event-append idempotency key; optional expected_event_seq for optimistic locking"
+      rationale: "Makes caller-side retry across transient failures safe without substrate needing to understand caller idempotency semantics."
+    - decision: "Signing: HMAC-SHA256 over RFC 8785 canonical JSON envelope; canonical hash stored alongside signature for jsonb-independent re-verification"
+      rationale: "Signature stability must survive Postgres version upgrades that change jsonb canonicalization. Storing canonical hash decouples verification from jsonb round-trip behavior."
+    - decision: "Renaming: in-transaction side effects are transition validators (no I/O, gate commit); async side effects are hooks (durable queue, retryable)"
+      rationale: "Naming forces correct mental model. Consumers reach for hooks by default; validators are a narrow exception path for work necessarily atomic with the transition."
+    - decision: "Closed custom field type vocabulary: string, integer, boolean, timestamp, json, enum, work_item_ref. Expansion requires substrate minor version bump"
+      rationale: "Prevents uncontrolled type proliferation; version-gated expansion keeps workflow definitions portable across substrate versions."
+    - decision: "Trust tiers on event fields: authenticated (actor_id, key_id) / server-stamped (timestamp, event_seq) / actor-claimed (actor_metadata)"
+      rationale: "Consumers (UI, audit tooling, replay validators) must distinguish field trustworthiness. Surfaces role as 'claimed' until enforcement lands."
+    - decision: "Structured work-item query (FR-05b) as MVP"
+      rationale: "Closes the API gap where agents would otherwise reach into work_items_current directly to discover claimable work. Foundation for federated UI list views."
+    - decision: "Public API surface formalized (section 19): protocol, not Postgres connection; library is sole signer; service-wrapping is mechanical"
+      rationale: "If the API leaks Postgres internals, every service wrapper becomes architectural. Clean boundary means sidecar/federated-UI service layer is a thin HTTP translation, not a redesign."
+    - decision: "Consumer expectation boundary (section 20): explicit enumeration of what substrate does NOT do"
+      rationale: "The 'coordination, not orchestration' label is too easily misread. Enumerating non-goals prevents the most common adoption failure: 'I thought substrate would handle X.'"
+    - decision: "Per-project DB isolation (BR-13) acknowledged as load-bearing with documented migration path"
+      rationale: "DB-per-project is correct at homelab scale. Migration path to tenant_id-in-shared-DB documented so the boundary can shift without API changes when operational pain warrants."
+
+  pending:
+    - item: "Workflow file composition (!include / merge)"
+      why_deferred: "Premature in v1; loader extension is additive"
+      impact_if_wrong: "None until needed; can grow later without breaking single-file workflows"
+    - item: "Schema partitioning for events table"
+      why_deferred: "Cheap to add when volume warrants; unnecessary at homelab scale"
+      impact_if_wrong: "Slow queries when one project becomes high-volume; addressable with month-partition migration"
+    - item: "Actor → allowed_roles enforcement"
+      why_deferred: "MVP threat model trusts authenticated actors"
+      impact_if_wrong: "If trust assumption breaks, role-misdeclaration is detectable post-hoc via event log audit; prevention requires this enforcement"
+    - item: "--continue-on-revoked replay flag"
+      why_deferred: "Operator tooling, additive"
+      impact_if_wrong: "Replay halts on revoked-key events; operator must triage manually until flag exists"
+    - item: "OIDC verifier implementation"
+      why_deferred: "No human users in MVP"
+      impact_if_wrong: "Adding OIDC requires implementing verifier plug; no schema migration to actor model"
+    - item: "Sidecar / non-Python integration"
+      why_deferred: "All MVP agents are Python"
+      impact_if_wrong: "Migration to sidecar is additive (substrate exposes RPC over local socket); no core schema change"
+    - item: "Domain-expert distributed-systems correctness review"
+      why_deferred: "Resolved 2026-05-05 — two-reviewer correctness pass completed. Findings integrated into spec v2 (sections 17, 18, FR-03/FR-13/FR-15/FR-16/FR-17 revisions, BR-09 strengthened, BR-10/BR-11/BR-12 added, ACs 24-31 added)."
+      impact_if_wrong: "N/A — resolved"
+
+  intent_signals:
+    - signal: "Generalize it and have it work for all projects more generally"
+      relevance: "Substrate must be project-agnostic; resist factory-specific concepts leaking into core schema. Workflow definitions are the project-specific layer."
+    - signal: "One source of truth for all projects ... one pane of glass we can feed projects into when we eventually make a human readable UI"
+      relevance: "Shape the contract so federated UI is additive, not redesign trigger. ui_visible flag, declarative workflow def, event log read shapes all serve this."
+    - signal: "Non-revenue homelab project; license costs are the binding constraint, token spend is not"
+      relevance: "Prefer richly-logged, verbose, debug-friendly implementations over throughput-optimized. Avoid per-seat-licensed tools (Linear / Jira-cloud)."
+    - signal: "Compose with, not replace, the existing reasoning.log convention"
+      relevance: "Substrate must not assume sole ownership of agent state; reasoning.log continues to coexist."
+    - signal: "Currently zero humans-in-the-loop, but the design should not foreclose that"
+      relevance: "Actor model + identity verifier shaped to accept humans without schema migration; ui_visible flag and pluggable verifier honor this."
+    - signal: "Idempotency and exactly-once semantics per task type, not globally"
+      relevance: "Substrate does not enforce exactly-once globally; per-hook retry policy and dead-letter behavior are project-tunable; sync-hook-rollback gives exactly-once-per-transition where needed."
+    - signal: "What's substrate concern vs. agent concern"
+      relevance: "Substrate is coordination + state; agents own work, hooks, scheduling, retries beyond the dispatch primitive. Resist scope creep."
+    - signal: "Minimum API surface needs to be to keep a future UI cheap"
+      relevance: "Read-event-log primitives (FR-05) and current-state queries are the UI's primary surface; design indexes and query shapes for the UI's future use, not just hot-path agent operations."
+
+# ---------------------------------------------------------------------------
+# Delta to Next Level
+# ---------------------------------------------------------------------------
+
+delta_to_next_level:
+  - gap: "Concrete decision on actor → allowed_roles mapping (in or out for v2)"
+    what_would_close_it: "Threat-model decision; if in, the data model adjustment needed"
+  - gap: "Concrete event log retention policy"
+    what_would_close_it: "Always-grow vs. month-partition trigger threshold vs. archival-to-cold-storage SOP"
+  - gap: "Decision on workflow file composition mechanism"
+    what_would_close_it: "Either declare a concrete loader extension or formally drop !include / merge as out-of-scope"
+  - gap: "Postgres major version support matrix pinned"
+    what_would_close_it: "Decide minimum Postgres version (likely 13+ for partial unique indexes used in escalation idempotency); document"
+  - gap: "First Software Factory pilot workflow definition authored"
+    what_would_close_it: "Downstream artifact; not a substrate concern, but blocks MVP shipping"
