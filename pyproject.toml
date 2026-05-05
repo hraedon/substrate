@@ -31,6 +31,9 @@ packages = ["src/substrate"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+    "slow: scale benchmarks, skipped by default",
+]
 
 [tool.ruff]
 target-version = "py311"

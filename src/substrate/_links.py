@@ -59,6 +59,7 @@ def create_link(
     actor_metadata: dict | None,
     key_set: KeySet,
     event_id: uuid.UUID | None = None,
+    payload: dict | None = None,
 ) -> Link:
     if event_id is None:
         event_id = uuid.uuid4()
@@ -115,6 +116,7 @@ def create_link(
             "from_work_item_id": str(from_work_item_id),
             "to_work_item_id": str(to_work_item_id),
             "link_type": link_type,
+            **({"link_payload": payload} if payload else {}),
         },
         event_id=event_id,
     )
@@ -124,6 +126,7 @@ def create_link(
         from_work_item_id=from_work_item_id,
         to_work_item_id=to_work_item_id,
         link_type=link_type,
+        payload=payload,
     )
 
 

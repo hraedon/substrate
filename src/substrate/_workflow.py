@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -8,6 +9,7 @@ import structlog
 import yaml
 
 from ._errors import ErrorCode, SubstrateError
+from ._jcs import canonicalize
 from ._types import (
     CustomFieldDef,
     LinkTypeDef,
@@ -303,3 +305,13 @@ def _coerce_field(field_def: CustomFieldDef, value: object) -> object:
                 detail={"field": field_def.name},
             )
     return value
+
+
+def compute_content_hash(wf: WorkflowDefinition) -> bytes:
+    canonical_bytes = canonicalize(wf.to_dict())
+    return hashlib.sha256(canonical_bytes).digest()
+
+
+def compute_content_hash_from_dict(data: dict) -> bytes:
+    canonical_bytes = canonicalize(data)
+    return hashlib.sha256(canonical_bytes).digest()

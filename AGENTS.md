@@ -93,7 +93,7 @@ sub.release_claim(work_item_id, actor_id)
 sub.sweep_expired_claims()
 sub.query_work_items(workflow_name=..., current_states=[...], claimable_now=True)
 sub.read_events(work_item_id=...)
-sub.create_link(from_id, to_id, link_type, actor_id)
+sub.create_link(from_id, to_id, link_type, actor_id, payload=...)
 sub.remove_link(from_id, to_id, link_type, actor_id)
 sub.replay()  # -> ReplayReport with drift detection
 sub.close()
@@ -125,7 +125,7 @@ sub.validate_actor_metadata(metadata, schema=None)  # lint helper (FR-18)
 
 ## Status
 
-MVP + Phase 2 implemented. All FRs FR-01 through FR-23 are now in tree. 61 tests passing across 7 files (smoke, signing, replay, idempotency, concurrency, api_surface, phase2).
+MVP + Phase 2 implemented. All FRs FR-01 through FR-23 are now in tree. 81 tests + 3 scale benchmarks passing across 9 files (smoke, signing, replay, idempotency, concurrency, api_surface, phase2, jcs, scale). All breadcrumbs resolved.
 
 Phase 2 additions: FR-10 (escalation), FR-13 (hooks/validators), FR-14 (dead-letter requeue), FR-18 (lint helper). Migration `003_escalation_idempotency.sql` adds the partial unique index that backstops escalation idempotency.
 
@@ -165,3 +165,17 @@ Substrate-specific wrappers in `.substrate/commands/`:
 - `/reflection` — write a reflection only
 
 System-wide skills (`/reflect`, `/end`) provide portable equivalents; the substrate-specific versions add test runs and worklog updates.
+
+## Patterns
+
+### Telemetry via hooks
+
+Substrate's `actor_metadata` is JSONB — free-form structured metadata for downstream consumers. To produce indexed aggregates (e.g., per-role pass rates), register a hook handler on the relevant event types that writes denormalized rows to a consumer-maintained reporting table. The reporting table lives outside substrate's schema; substrate's contract is the authoritative event log, and the reporting table is a derived view that can be rebuilt by replaying events through the same handler.
+
+Recommended shape:
+
+1. **Reporting table** in a separate schema (or external store) with indexed columns for the dimensions you query by.
+2. **Hook handler** that reads `actor_metadata`, extracts dimensions, and upserts the reporting row.
+3. **Rebuild path**: drain the events table through the same handler in `event_seq` order to reconstruct from scratch.
+
+Do not add denormalized columns to substrate's `events` table for consumer-specific dimensions. Substrate stays general; the consumer maintains its own reporting layer.

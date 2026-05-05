@@ -385,14 +385,18 @@ class Link:
     from_work_item_id: uuid.UUID
     to_work_item_id: uuid.UUID
     link_type: str
+    payload: dict | None = None
 
     def to_dict(self) -> dict:
-        return {
+        d = {
             "link_id": str(self.link_id),
             "from_work_item_id": str(self.from_work_item_id),
             "to_work_item_id": str(self.to_work_item_id),
             "link_type": self.link_type,
         }
+        if self.payload is not None:
+            d["payload"] = self.payload
+        return d
 
     @classmethod
     def from_dict(cls, data: dict) -> Link:
@@ -401,6 +405,7 @@ class Link:
             from_work_item_id=uuid.UUID(data["from_work_item_id"]),
             to_work_item_id=uuid.UUID(data["to_work_item_id"]),
             link_type=data["link_type"],
+            payload=data.get("payload"),
         )
 
 

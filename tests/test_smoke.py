@@ -37,6 +37,13 @@ class TestWorkflow:
         assert r1.name == r2.name
         assert r1.version == r2.version
 
+    def test_register_version_conflict(self, substrate):
+        yaml_content = Path(WORKFLOW_PATH).read_text()
+        substrate.register_workflow(yaml_content)
+        modified = yaml_content.replace("attempt_threshold: 3", "attempt_threshold: 5")
+        with pytest.raises(Exception, match="WORKFLOW_VERSION_CONFLICT"):
+            substrate.register_workflow(modified)
+
     def test_register_invalid_yaml(self, substrate):
         with pytest.raises(Exception, match="Schema validation"):
             substrate.register_workflow(":::invalid yaml:::")
@@ -229,6 +236,32 @@ class TestQuery:
         for wi in page.items:
             assert wi.claimed_by is None or wi.claim_expires_at is not None
 
+    def test_pagination_stable_no_duplicates(self, substrate):
+        for i in range(5):
+            substrate.create_work_item(
+                workflow_name="test_workflow",
+                work_item_type="feature",
+                actor_id="agent-1",
+                custom_fields={"title": f"Page test {i}"},
+            )
+
+        seen_ids = set()
+        cursor = None
+        while True:
+            page = substrate.query_work_items(
+                workflow_name="test_workflow",
+                current_states=["new"],
+                cursor=cursor,
+                page_size=2,
+            )
+            for wi in page.items:
+                assert wi.work_item_id not in seen_ids
+                seen_ids.add(wi.work_item_id)
+            if not page.has_more:
+                break
+            cursor = page.cursor
+        assert len(seen_ids) >= 5
+
 
 class TestLinks:
     def test_create_and_remove_link(self, substrate):
@@ -259,6 +292,29 @@ class TestLinks:
             link_type="fixes",
             actor_id="agent-1",
         )
+
+    def test_create_link_with_payload(self, substrate):
+        wi1, _ = substrate.create_work_item(
+            workflow_name="test_workflow",
+            work_item_type="feature",
+            actor_id="agent-1",
+            custom_fields={"title": "Feature 1"},
+        )
+        wi2, _ = substrate.create_work_item(
+            workflow_name="test_workflow",
+            work_item_type="bug",
+            actor_id="agent-1",
+            custom_fields={"severity": "major"},
+        )
+
+        link = substrate.create_link(
+            from_work_item_id=wi1.work_item_id,
+            to_work_item_id=wi2.work_item_id,
+            link_type="fixes",
+            actor_id="agent-1",
+            payload={"rationale": "Bug caused by missing null check", "priority": "high"},
+        )
+        assert link.payload == {"rationale": "Bug caused by missing null check", "priority": "high"}
 
 
 class TestIdempotency:

@@ -175,7 +175,7 @@
     - (b) JSON Schema — rejects with JSON-pointer error.
     - (c) Structural / semantic — reachability (every state reachable from start), terminal-state declaration consistency (states with no outgoing transitions must be declared terminal), role-binding consistency (roles referenced in transitions must be declared at workflow level), type-vocabulary consistency (every field type drawn from the closed set above), `work_item_ref` target-type consistency (referenced work-item-types declared in same workflow).
 
-  - **Registry uniqueness:** `(workflow_name, version)` is unique within a project DB. Concurrent registration of the same `(name, version)` pair: first wins; second rejects with "version already registered."
+  - **Registry uniqueness:** `(workflow_name, version)` is unique within a project DB. Content-based idempotency: re-registration of the same `(name, version)` with identical content (SHA-256 of JCS-canonicalized definition) returns the existing row; re-registration with different content rejects with `WORKFLOW_VERSION_CONFLICT`. This is divergence detection, not anti-idempotency — the operational intent is to catch accidental re-registration of a different workflow under the same key. *Amended per BC-022: original spec language ("first wins; second rejects") was imprecise about the idempotent case.*
 
   Any failure rejects registration with an operator-actionable error message including source location. Existing registered versions remain valid.
 
@@ -270,7 +270,7 @@ Retention: indefinite for v1. Future move when needed: month-partition `events` 
 | `expected_event_seq` mismatch | Optimistic-lock check fails | Reject with "concurrent modification"; caller may refetch state and retry | Caller sees rejection |
 | NOTIFY payload would exceed 8KB | Hook event payload large | Library always uses wakeup-only NOTIFY (event_id reference); consumer reads full payload from `hook_queue` | Internal — not surfaced |
 | Replay drift detected | Replay output differs from live `work_items_current` | Record in `replay_report` as `replayed_drift`; replay continues; operator action required | Operator alert via report |
-| Concurrent workflow version registration | Two registrations of same `(name, version)` | First wins; second rejects with "version already registered" | Caller sees rejection |
+| Concurrent workflow version registration | Two registrations of same `(name, version)` | Same content → idempotent (returns existing row); different content → rejects with `WORKFLOW_VERSION_CONFLICT` | Caller sees idempotent success or rejection |
 | Validator performs I/O (contract violation) | Validator code calls out to network/disk | Behavior undefined; operator-actionable structured log; treat as bug | Structured log |
 
 ---

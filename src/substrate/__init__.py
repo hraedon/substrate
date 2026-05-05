@@ -170,17 +170,38 @@ class Substrate:
         timer = OpTimer(self._project, "register_workflow")
         try:
             wf = parse_and_validate(yaml_content)
+            from ._workflow import compute_content_hash, compute_content_hash_from_dict
+
+            content_hash = compute_content_hash(wf)
             with self._mgr.transaction() as conn:
                 from psycopg.sql import SQL
 
                 existing = conn.execute(
                     SQL(
-                        "SELECT workflow_name, version, substrate_version, registered_at "
+                        "SELECT workflow_name, version, substrate_version, registered_at, "
+                        "content_hash, definition "
                         "FROM workflow_registry WHERE workflow_name = %s AND version = %s"
                     ),
                     [wf.name, wf.version],
                 ).fetchone()
                 if existing is not None:
+                    existing_hash = existing["content_hash"]
+                    if existing_hash is None:
+                        existing_hash = compute_content_hash_from_dict(existing["definition"])
+                        conn.execute(
+                            SQL(
+                                "UPDATE workflow_registry SET content_hash = %s "
+                                "WHERE workflow_name = %s AND version = %s"
+                            ),
+                            [existing_hash, wf.name, wf.version],
+                        )
+                    if existing_hash != content_hash:
+                        raise SubstrateError(
+                            ErrorCode.WORKFLOW_VERSION_CONFLICT,
+                            f"Workflow {wf.name!r} v{wf.version} already registered "
+                            f"with different content",
+                            detail={"workflow_name": wf.name, "version": wf.version},
+                        )
                     timer.log("ok", detail=f"idempotent:{wf.name} v{wf.version}")
                     return WorkflowVersion(
                         name=existing["workflow_name"],
@@ -192,13 +213,14 @@ class Substrate:
                 row = conn.execute(
                     SQL(
                         "INSERT INTO workflow_registry "
-                        "(workflow_name, version, substrate_version, definition) "
-                        "VALUES (%s, %s, %s, %s) "
+                        "(workflow_name, version, substrate_version, definition, content_hash) "
+                        "VALUES (%s, %s, %s, %s, %s) "
                         "RETURNING registered_at"
                     ),
                     [
                         wf.name, wf.version, wf.substrate_version,
                         psycopg.types.json.Jsonb(wf.to_dict()),
+                        content_hash,
                     ],
                 ).fetchone()
 
@@ -638,6 +660,7 @@ class Substrate:
         actor_metadata: dict | None = None,
         *,
         event_id: uuid.UUID | None = None,
+        payload: dict | None = None,
     ) -> Link:
         from ._links import create_link as _create
 
@@ -654,6 +677,7 @@ class Substrate:
                     actor_metadata=actor_metadata,
                     key_set=self._keys,
                     event_id=event_id,
+                    payload=payload,
                 )
 
             self._metrics.inc("links_created", self._project)
