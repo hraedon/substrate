@@ -27,7 +27,9 @@ related: ["002", "003"]
 
 ## Open
 
-No open breadcrumbs. All known issues resolved.
+| # | Title | Severity | Status |
+|---|---|---|---|
+| 026 | Dead error codes: defined but never raised | low | proposed |
 
 ## Resolved
 

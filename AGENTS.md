@@ -133,7 +133,9 @@ sub.list_actor_roles(actor_id=None)                  # list registered roles
 
 ## Status
 
-MVP + Phase 2 + Phase 3 implemented. All FRs FR-01 through FR-27 are now in tree. 111 tests + 3 scale benchmarks passing across 11 files (smoke, signing, replay, idempotency, concurrency, api_surface, phase2, phase3, e2e, jcs, scale). All breadcrumbs resolved.
+MVP + Phase 2 + Phase 3 implemented. Production readiness sweep complete. All FRs FR-01 through FR-27 are in tree. 154 tests + 3 scale benchmarks passing across 17 files. All breadcrumbs resolved.
+
+Production readiness additions: migration packaging for pip installs (importlib.resources + force-include), claims_stolen metric wired, actor_kind validation at API boundary, docstrings on all public methods, spec.yaml synced to v4, structured replay error handling.
 
 Phase 3 additions: FR-24 (actor → allowed_roles enforcement, closes BR-09), FR-25 (continue-on-revoked replay flag), FR-26 (update_not_before API), FR-27 (custom field validation at transition time). Migration `005_actor_roles.sql` adds the actor_roles table. ReplayReport gains `warnings` field.
 

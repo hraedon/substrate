@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from substrate._errors import SubstrateError
 from substrate._testing import drop_project_schema
 
 TESTS_DIR = Path(__file__).parent
@@ -65,20 +66,22 @@ class TestWorkItem:
         assert evt.event_seq == 1
 
     def test_create_with_invalid_type(self, substrate):
-        with pytest.raises(Exception, match="not declared"):
+        with pytest.raises(SubstrateError) as exc_info:
             substrate.create_work_item(
                 workflow_name="test_workflow",
                 work_item_type="nonexistent",
                 actor_id="agent-1",
             )
+        assert "not declared" in exc_info.value.message
 
     def test_create_with_invalid_field(self, substrate):
-        with pytest.raises(Exception, match="Required"):
+        with pytest.raises(SubstrateError) as exc_info:
             substrate.create_work_item(
                 workflow_name="test_workflow",
                 work_item_type="bug",
                 actor_id="agent-1",
             )
+        assert "Required" in exc_info.value.message
 
 
 class TestTransition:
@@ -109,13 +112,14 @@ class TestTransition:
 
     def test_invalid_transition(self, substrate):
         wi = self._create_feature(substrate)
-        with pytest.raises(Exception, match="not valid"):
+        with pytest.raises(SubstrateError) as exc_info:
             substrate.transition(
                 work_item_id=wi.work_item_id,
                 transition_name="approve",
                 actor_id="agent-1",
                 actor_metadata={"role": "agent"},
             )
+        assert exc_info.value.code == "INVALID_TRANSITION"
 
     def test_role_not_permitted(self, substrate):
         wi = self._create_feature(substrate)
@@ -125,13 +129,14 @@ class TestTransition:
             actor_id="agent-1",
             actor_metadata={"role": "agent"},
         )
-        with pytest.raises(Exception, match="not permitted"):
+        with pytest.raises(SubstrateError) as exc_info:
             substrate.transition(
                 work_item_id=wi.work_item_id,
                 transition_name="submit_review",
                 actor_id="agent-1",
                 actor_metadata={"role": "reviewer"},
             )
+        assert exc_info.value.code == "ROLE_NOT_PERMITTED"
 
     def test_full_lifecycle(self, substrate):
         wi = self._create_feature(substrate)
@@ -192,8 +197,9 @@ class TestClaims:
 
         substrate.acquire_claim(wi.work_item_id, "agent-1", ttl_seconds=300)
 
-        with pytest.raises(Exception, match="CLAIM_CONTESTED"):
+        with pytest.raises(SubstrateError) as exc_info:
             substrate.acquire_claim(wi.work_item_id, "agent-2", ttl_seconds=300)
+        assert exc_info.value.code == "CLAIM_CONTESTED"
 
     def test_heartbeat(self, substrate):
         wi, _ = substrate.create_work_item(

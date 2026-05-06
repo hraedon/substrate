@@ -70,7 +70,7 @@ def acquire_claim(
                 acquired_at=existing_claim["acquired_at"],
                 expires_at=new_expires,
                 attempt_number=existing_claim["attempt_number"],
-            ), False
+            ), False, False
         raise SubstrateError(
             ErrorCode.CLAIM_CONTESTED,
             f"Work item {work_item_id} is already claimed by {existing_claim['actor_id']}",
@@ -152,6 +152,7 @@ def acquire_claim(
             _prelocked_wi=wi,
         )
 
+    stolen = prior_actor_id is not None
     escalated = _check_escalation(conn, wi, attempt_number, key_set)
 
     claim = Claim(
@@ -161,7 +162,7 @@ def acquire_claim(
         expires_at=expires_at,
         attempt_number=attempt_number,
     )
-    return claim, escalated
+    return claim, escalated, stolen
 
 
 def _check_escalation(

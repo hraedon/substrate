@@ -1,15 +1,15 @@
 # spec.yaml — substrate
 # Machine-readable sidecar to spec.md. Source of truth is spec.md.
-# Regenerated against spec.md v3 (2026-05-05).
+# Regenerated against spec.md v4 (2026-05-06).
 
 meta:
   name: "substrate"
   spec_level: 3
   desired_level: 3
-  date: "2026-05-05"
+  date: "2026-05-06"
   extensions: []
-  spec_md_version: 3
-  yaml_regenerated_against: 3
+  spec_md_version: 4
+  yaml_regenerated_against: 4
 
 # ---------------------------------------------------------------------------
 # Glossary
@@ -116,9 +116,17 @@ mvp:
         - "FR-18"
       rationale: "Adds reactivity and tooling once consumers exist."
     - phase: 3
+      label: "Authorization + replay resilience"
+      fr_ids:
+        - "FR-24"
+        - "FR-25"
+        - "FR-26"
+        - "FR-27"
+      rationale: "Actor → allowed_roles enforcement (closes BR-09), continue-on-revoked replay flag, update_not_before API, custom field validation at transitions."
+    - phase: 4
       label: "Future"
       fr_ids: []
-      rationale: "Federated UI, OIDC verifier, actor → allowed_roles, workflow file composition, month-partitioning, --continue-on-revoked replay flag."
+      rationale: "Federated UI, OIDC verifier, workflow file composition, month-partitioning."
 
   dependency_hints:
     - fr_id: "FR-02"
@@ -185,8 +193,8 @@ open_questions:
     category: "cheap_to_change"
     owner: "Project authors at use time"
   - question: "Actor → allowed_roles enforcement"
-    category: "cheap_to_change"
-    owner: "Operator — fast-follow when threat model warrants"
+    category: "resolved"
+    owner: "Implemented as FR-24 (Phase 3). Opt-in enforcement via actor_roles table."
   - question: "Disk-level durability / backup policy"
     category: "out_of_scope"
     owner: "Operator"
@@ -194,8 +202,8 @@ open_questions:
     category: "cheap_to_change"
     owner: "Future scope"
   - question: "--continue-on-revoked replay flag"
-    category: "cheap_to_change"
-    owner: "Operator tooling, deferred"
+    category: "resolved"
+    owner: "Implemented as FR-25 (Phase 3)."
   - question: "Domain-expert review for distributed-systems correctness (event-sourcing, durability, concurrency)"
     category: "resolved"
     owner: "Resolved 2026-05-05 — two-reviewer correctness pass completed. Findings integrated into spec v2."
@@ -207,8 +215,8 @@ open_questions:
 assumptions:
   - assumption: "Postgres is available on homelab K3s and provides standard ACID semantics"
     rationale: "Stated explicitly in vibe spec"
-  - assumption: "Operator runs all agents and trusts them not to misdeclare role at MVP"
-    rationale: "Documented threat model boundary; fast-follow when warranted (BR-09)"
+  - assumption: "Operator runs all agents and trusts them not to misdeclare role by default (actor-claimed trust tier). FR-24 provides opt-in enforcement when threat model warrants."
+    rationale: "Homelab single-operator context; enforcement is available but not required."
   - assumption: "Workflow files authored by operator (not untrusted parties)"
     rationale: "Homelab single-operator context; YAML parsing safety follows"
   - assumption: "License-cost-bound but token-spend unconstrained — substrate may be liberal with logging detail and event payload size"
@@ -361,6 +369,18 @@ handoff:
       rationale: "The 'coordination, not orchestration' label is too easily misread. Enumerating non-goals prevents the most common adoption failure: 'I thought substrate would handle X.'"
     - decision: "Per-project DB isolation (BR-13) acknowledged as load-bearing with documented migration path"
       rationale: "DB-per-project is correct at homelab scale. Migration path to tenant_id-in-shared-DB documented so the boundary can shift without API changes when operational pain warrants."
+    - decision: "Actor → allowed_roles enforcement (FR-24): opt-in via actor_roles table"
+      rationale: "Actors with no registered roles are trusted; actors with registered roles must claim a role in their set. Closes BR-09."
+    - decision: "Continue-on-revoked replay flag (FR-25): skips revoked-key events with warnings"
+      rationale: "Makes replay practical after key rotation without halting on historical revoked-key events."
+    - decision: "update_not_before API (FR-26): emits not_before_set event, updates projection"
+      rationale: "Closes spec gap where not_before_set events existed in replay but no API could produce them."
+    - decision: "Custom field validation at transitions (FR-27): extends creation-time validation to update path"
+      rationale: "Rejects unknown fields and type mismatches in custom_fields_update during transitions."
+    - decision: "Postgres version pinned to 15+"
+      rationale: "Used in test infrastructure; features used: JSONB, LISTEN/NOTIFY, FOR UPDATE row locks, declarative partitioning available."
+    - decision: "Event log retention: always-grow at homelab scale; month-partition at 1M events"
+      rationale: "Correct for ≤10k work-items, ≤100k events per project. Month-partition via declarative partitioning is a one-time migration per project."
 
   pending:
     - item: "Workflow file composition (!include / merge)"
@@ -369,21 +389,12 @@ handoff:
     - item: "Schema partitioning for events table"
       why_deferred: "Cheap to add when volume warrants; unnecessary at homelab scale"
       impact_if_wrong: "Slow queries when one project becomes high-volume; addressable with month-partition migration"
-    - item: "Actor → allowed_roles enforcement"
-      why_deferred: "MVP threat model trusts authenticated actors"
-      impact_if_wrong: "If trust assumption breaks, role-misdeclaration is detectable post-hoc via event log audit; prevention requires this enforcement"
-    - item: "--continue-on-revoked replay flag"
-      why_deferred: "Operator tooling, additive"
-      impact_if_wrong: "Replay halts on revoked-key events; operator must triage manually until flag exists"
     - item: "OIDC verifier implementation"
       why_deferred: "No human users in MVP"
       impact_if_wrong: "Adding OIDC requires implementing verifier plug; no schema migration to actor model"
     - item: "Sidecar / non-Python integration"
       why_deferred: "All MVP agents are Python"
       impact_if_wrong: "Migration to sidecar is additive (substrate exposes RPC over local socket); no core schema change"
-    - item: "Domain-expert distributed-systems correctness review"
-      why_deferred: "Resolved 2026-05-05 — two-reviewer correctness pass completed. Findings integrated into spec v2 (sections 17, 18, FR-03/FR-13/FR-15/FR-16/FR-17 revisions, BR-09 strengthened, BR-10/BR-11/BR-12 added, ACs 24-31 added)."
-      impact_if_wrong: "N/A — resolved"
 
   intent_signals:
     - signal: "Generalize it and have it work for all projects more generally"
@@ -408,13 +419,9 @@ handoff:
 # ---------------------------------------------------------------------------
 
 delta_to_next_level:
-  - gap: "Concrete decision on actor → allowed_roles mapping (in or out for v2)"
-    what_would_close_it: "Threat-model decision; if in, the data model adjustment needed"
   - gap: "Concrete event log retention policy"
     what_would_close_it: "Always-grow vs. month-partition trigger threshold vs. archival-to-cold-storage SOP"
   - gap: "Decision on workflow file composition mechanism"
     what_would_close_it: "Either declare a concrete loader extension or formally drop !include / merge as out-of-scope"
-  - gap: "Postgres major version support matrix pinned"
-    what_would_close_it: "Decide minimum Postgres version (likely 13+ for partial unique indexes used in escalation idempotency); document"
   - gap: "First Software Factory pilot workflow definition authored"
     what_would_close_it: "Downstream artifact; not a substrate concern, but blocks MVP shipping"

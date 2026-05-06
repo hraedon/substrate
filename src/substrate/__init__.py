@@ -58,8 +58,25 @@ from ._workflow import parse_file as parse_file
 
 log = structlog.get_logger()
 
+_VALID_ACTOR_KINDS = {"agent", "human", "system"}
+
+
+def _validate_actor_kind(actor_kind: str) -> None:
+    if actor_kind not in _VALID_ACTOR_KINDS:
+        raise SubstrateError(
+            ErrorCode.CUSTOM_FIELD_VIOLATION,
+            f"Invalid actor_kind {actor_kind!r}. Must be one of {sorted(_VALID_ACTOR_KINDS)}",
+        )
+
 
 class Substrate:
+    """Coordination and durable state for agent pipelines over Postgres.
+
+    One Substrate instance owns one logical project namespace. Use
+    ``create_project`` to bootstrap a new project, then connect via the
+    constructor for subsequent sessions.
+    """
+
     def __init__(
         self,
         dsn: str,
@@ -70,6 +87,20 @@ class Substrate:
         pool_max: int = 10,
         prometheus_registry=None,
     ) -> None:
+        """Connect to an existing project.
+
+        Args:
+            dsn: Postgres connection string.
+            project: Project (schema) name.
+            hmac_key_path: Path to HMAC key-set JSON file (required).
+            pool_min: Minimum connection-pool size.
+            pool_max: Maximum connection-pool size.
+            prometheus_registry: Optional ``prometheus_client.CollectorRegistry``.
+
+        Raises:
+            SubstrateError: If migrations are pending or workflow versions are
+                incompatible.
+        """
         if hmac_key_path is None:
             raise SubstrateError(
                 ErrorCode.UNKNOWN_KEY_ID,
@@ -108,6 +139,19 @@ class Substrate:
         pool_max: int = 10,
         prometheus_registry=None,
     ) -> Substrate:
+        """Create a new project: schema, migrations, and return a connected handle.
+
+        Args:
+            dsn: Postgres connection string.
+            project: Project (schema) name.
+            hmac_key_path: Path to HMAC key-set JSON file.
+            pool_min: Minimum connection-pool size.
+            pool_max: Maximum connection-pool size.
+            prometheus_registry: Optional ``prometheus_client.CollectorRegistry``.
+
+        Returns:
+            A connected ``Substrate`` instance.
+        """
         mgr = ConnectionManager(dsn, project, pool_min=pool_min, pool_max=pool_max)
         mgr.open()
         mgr.create_schema()
@@ -124,6 +168,7 @@ class Substrate:
         )
 
     def close(self) -> None:
+        """Stop hook consumer (if running) and release the connection pool."""
         if self._hook_consumer.is_running:
             self._hook_consumer.stop()
         self._mgr.close()
@@ -142,21 +187,41 @@ class Substrate:
         return self._metrics.registry
 
     def register_validator(self, name: str, handler: Callable) -> None:
+        """Register a sync transition validator. Blocks the transaction on failure.
+
+        Args:
+            name: Must match a ``validator`` field in a workflow transition.
+            handler: ``Callable[[ValidatorContext], None]``. Must complete
+                within 5 seconds.
+        """
         self._validators[name] = handler
 
     def register_hook_handler(self, name: str, handler: Callable) -> None:
+        """Register an async hook handler dispatched via the hook queue.
+
+        Args:
+            name: Must match a hook name listed in a workflow transition's ``hooks``.
+            handler: ``Callable[[HookContext], None]``.
+        """
         updated = dict(self._hook_handlers)
         updated[name] = handler
         self._hook_handlers = updated
         self._hook_consumer._handlers = updated
 
     def start_hook_consumer(self) -> None:
+        """Start a background thread that LISTENs and polls the hook queue."""
         self._hook_consumer.start()
 
     def stop_hook_consumer(self) -> None:
+        """Stop the background hook consumer thread."""
         self._hook_consumer.stop()
 
     def poll_hooks(self) -> int:
+        """Manually drain and process pending hooks from the queue.
+
+        Returns:
+            Number of hooks processed.
+        """
         from ._hooks import poll_and_process_hooks
 
         with self._mgr.transaction() as conn:
@@ -168,6 +233,22 @@ class Substrate:
         self,
         yaml_content: str,
     ) -> WorkflowVersion:
+        """Parse, validate, and register a workflow definition.
+
+        Idempotent: re-registering the same name+version with identical content
+        returns the existing entry. Different content raises
+        ``WORKFLOW_VERSION_CONFLICT``.
+
+        Args:
+            yaml_content: Workflow YAML string.
+
+        Returns:
+            The registered ``WorkflowVersion``.
+
+        Raises:
+            SubstrateError: ``WORKFLOW_VALIDATION_FAILED``,
+                ``WORKFLOW_SEMANTIC_ERROR``, ``WORKFLOW_VERSION_CONFLICT``.
+        """
         timer = OpTimer(self._project, "register_workflow")
         try:
             wf = parse_and_validate(yaml_content)
@@ -241,6 +322,15 @@ class Substrate:
         self,
         path: str | Path,
     ) -> WorkflowVersion:
+        """Register a workflow from a file path. Convenience wrapper around
+        ``register_workflow``.
+
+        Args:
+            path: Path to a workflow YAML file.
+
+        Returns:
+            The registered ``WorkflowVersion``.
+        """
         return self.register_workflow(Path(path).read_text())
 
     def create_work_item(
@@ -255,8 +345,28 @@ class Substrate:
         not_before: datetime | None = None,
         event_id: uuid.UUID | None = None,
     ) -> tuple[WorkItem, Event]:
+        """Create a new work item in the given workflow.
+
+        Args:
+            workflow_name: Name of a registered workflow.
+            work_item_type: Must be declared in the workflow definition.
+            actor_id: Authenticated actor identifier.
+            actor_kind: ``"agent"`` | ``"human"`` | ``"system"``.
+            actor_metadata: Optional JSONB metadata for audit.
+            custom_fields: Initial field values validated against the type schema.
+            not_before: Gate timestamp; claims before this time are rejected.
+            event_id: Optional UUIDv4 for idempotency.
+
+        Returns:
+            Tuple of ``(WorkItem, Event)``.
+
+        Raises:
+            SubstrateError: ``WORKFLOW_NOT_REGISTERED``,
+                ``WORK_ITEM_TYPE_NOT_DECLARED``, ``CUSTOM_FIELD_VIOLATION``.
+        """
         timer = OpTimer(self._project, "create_work_item")
         try:
+            _validate_actor_kind(actor_kind)
             from ._work_items import create_work_item as _create
 
             with self._mgr.transaction() as conn:
@@ -293,8 +403,33 @@ class Substrate:
         event_id: uuid.UUID | None = None,
         expected_event_seq: int | None = None,
     ) -> Event:
+        """Append a free-form event to the work-item log.
+
+        Rejects transitions that match a workflow-defined transition name — use
+        ``transition()`` for state changes.
+
+        Args:
+            work_item_id: Target work item.
+            actor_id: Authenticated actor.
+            actor_kind: ``"agent"`` | ``"human"`` | ``"system"``.
+            actor_metadata: Optional JSONB metadata.
+            transition: Free-form transition label (must not collide with workflow).
+            payload: Optional JSONB payload.
+            event_id: UUIDv4 idempotency key.
+            expected_event_seq: Optimistic-concurrency check.
+
+        Returns:
+            The appended ``Event``.
+
+        Raises:
+            SubstrateError: ``WORK_ITEM_NOT_FOUND``,
+                ``TRANSITION_VIA_APPEND_BLOCKED``,
+                ``IDEMPOTENCY_COLLISION_WITH_DIFFERENT_PAYLOAD``,
+                ``CONCURRENT_MODIFICATION``.
+        """
         timer = OpTimer(self._project, "append_event")
         try:
+            _validate_actor_kind(actor_kind)
             if event_id is None:
                 event_id = uuid.uuid4()
 
@@ -363,8 +498,33 @@ class Substrate:
         event_id: uuid.UUID | None = None,
         expected_event_seq: int | None = None,
     ) -> Event:
+        """Execute a workflow-defined state transition.
+
+        Validates the transition against the pinned workflow version, checks
+        role gating, runs sync validators, and releases any active claim.
+
+        Args:
+            work_item_id: Target work item.
+            transition_name: Must match a transition in the pinned workflow version.
+            actor_id: Authenticated actor.
+            actor_kind: ``"agent"`` | ``"human"`` | ``"system"``.
+            actor_metadata: Must include ``"role"`` when roles are enforced.
+            payload: Optional JSONB payload.
+            custom_fields: Partial update to custom fields (validated against schema).
+            event_id: UUIDv4 idempotency key.
+            expected_event_seq: Optimistic-concurrency check.
+
+        Returns:
+            The appended ``Event``.
+
+        Raises:
+            SubstrateError: ``INVALID_TRANSITION``, ``ROLE_NOT_PERMITTED``,
+                ``ACTOR_ROLE_NOT_AUTHORIZED``, ``CUSTOM_FIELD_VIOLATION``,
+                ``VALIDATOR_TIMEOUT``, ``VALIDATOR_FAILED``.
+        """
         timer = OpTimer(self._project, "transition")
         try:
+            _validate_actor_kind(actor_kind)
             if event_id is None:
                 event_id = uuid.uuid4()
 
@@ -515,6 +675,25 @@ class Substrate:
         limit: int = 100,
         before_seq: int | None = None,
     ) -> list[Event]:
+        """Read events with structured filters. Exactly one filter dimension
+        should be provided.
+
+        Args:
+            work_item_id: Filter by work item (supports ``before_seq`` pagination).
+            actor_id: Filter by actor.
+            start: Range-start timestamp (requires ``end``).
+            end: Range-end timestamp (requires ``start``).
+            transition: Filter by transition name.
+            limit: Maximum events to return.
+            before_seq: Paginate backwards from this ``event_seq`` (requires
+                ``work_item_id``).
+
+        Returns:
+            List of ``Event`` objects.
+
+        Raises:
+            SubstrateError: ``INVALID_FILTER``.
+        """
         if before_seq is not None and work_item_id is None:
             raise SubstrateError(
                 ErrorCode.INVALID_FILTER,
@@ -550,6 +729,23 @@ class Substrate:
         cursor: uuid.UUID | None = None,
         page_size: int = 100,
     ) -> QueryPage[WorkItem]:
+        """Structured work-item query with cursor-based pagination.
+
+        Args:
+            workflow_name: Filter by workflow.
+            workflow_version: Filter by pinned version.
+            work_item_types: Filter by type names.
+            current_states: Filter by current state.
+            claimed_by: Filter by claiming actor.
+            claimable_now: True = unclaimed and ``not_before`` has passed.
+            needs_review: Filter by escalation flag.
+            has_link_type: Items with at least one active link of this type.
+            cursor: Continue from a previous page's cursor.
+            page_size: Items per page (default 100).
+
+        Returns:
+            ``QueryPage[WorkItem]`` with cursor for the next page.
+        """
         from ._work_items import query_work_items as _query
 
         with self._mgr.transaction() as conn:
@@ -568,6 +764,11 @@ class Substrate:
             )
 
     def get_work_item(self, work_item_id: uuid.UUID) -> WorkItem | None:
+        """Retrieve a single work item by ID.
+
+        Returns:
+            The ``WorkItem`` or ``None`` if not found.
+        """
         from ._work_items import get_work_item as _get
 
         with self._mgr.transaction() as conn:
@@ -581,17 +782,38 @@ class Substrate:
         *,
         event_id: uuid.UUID | None = None,
     ) -> Claim:
+        """Acquire a durable claim (lease) on a work item.
+
+        Same-actor re-acquire silently extends TTL. Cross-actor acquire on an
+        expired claim auto-steals and increments attempt_number.
+
+        Args:
+            work_item_id: Target work item.
+            actor_id: Claiming actor.
+            ttl_seconds: Lease duration in seconds (default 300).
+            event_id: UUIDv4 idempotency key.
+
+        Returns:
+            The ``Claim``.
+
+        Raises:
+            SubstrateError: ``CLAIM_CONTESTED``, ``NOT_BEFORE_FUTURE``,
+                ``WORK_ITEM_NOT_FOUND``.
+        """
         from ._claims import acquire_claim as _acquire
 
         timer = OpTimer(self._project, "acquire_claim")
         try:
             with self._mgr.transaction() as conn:
-                claim, escalated = _acquire(
+                claim, escalated, stolen = _acquire(
                     conn, work_item_id, actor_id, ttl_seconds,
                     self._keys, event_id,
                 )
 
             self._metrics.inc("claims_acquired", self._project)
+
+            if stolen:
+                self._metrics.inc("claims_stolen", self._project)
 
             if escalated:
                 self._metrics.inc("escalations", self._project)
@@ -613,6 +835,20 @@ class Substrate:
         *,
         expected_attempt_number: int | None = None,
     ) -> Claim:
+        """Renew a claim's TTL. Rejects if claim is held by a different actor.
+
+        Args:
+            work_item_id: Target work item.
+            actor_id: Must match the current claim holder.
+            ttl_seconds: New lease duration.
+            expected_attempt_number: Detect stale sessions after claim theft.
+
+        Returns:
+            The renewed ``Claim``.
+
+        Raises:
+            SubstrateError: ``CLAIM_LOST``, ``CLAIM_NOT_FOUND``.
+        """
         from ._claims import heartbeat_claim as _heartbeat
 
         timer = OpTimer(self._project, "heartbeat_claim")
@@ -636,6 +872,16 @@ class Substrate:
         *,
         event_id: uuid.UUID | None = None,
     ) -> None:
+        """Release a claim held by the given actor.
+
+        Args:
+            work_item_id: Target work item.
+            actor_id: Must match the current claim holder.
+            event_id: UUIDv4 idempotency key.
+
+        Raises:
+            SubstrateError: ``CLAIM_LOST``, ``CLAIM_NOT_FOUND``.
+        """
         from ._claims import release_claim as _release
 
         timer = OpTimer(self._project, "release_claim")
@@ -650,6 +896,11 @@ class Substrate:
             raise
 
     def sweep_expired_claims(self) -> int:
+        """Delete all expired claims and emit ``claim_expired`` events.
+
+        Returns:
+            Number of expired claims swept.
+        """
         from ._claims import sweep_expired_claims as _sweep
 
         with self._mgr.transaction() as conn:
@@ -669,10 +920,30 @@ class Substrate:
         event_id: uuid.UUID | None = None,
         payload: dict | None = None,
     ) -> Link:
+        """Create a typed directed link between two work items.
+
+        Args:
+            from_work_item_id: Source work item.
+            to_work_item_id: Target work item.
+            link_type: Must be declared in the workflow definition.
+            actor_id: Authenticated actor.
+            actor_kind: ``"agent"`` | ``"human"`` | ``"system"``.
+            actor_metadata: Optional JSONB metadata.
+            event_id: UUIDv4 idempotency key.
+            payload: Optional JSONB payload on the link.
+
+        Returns:
+            The created ``Link``.
+
+        Raises:
+            SubstrateError: ``LINK_TYPE_NOT_ALLOWED``,
+                ``LINK_TARGET_NOT_FOUND``, ``LINK_CROSS_PROJECT``.
+        """
         from ._links import create_link as _create
 
         timer = OpTimer(self._project, "create_link")
         try:
+            _validate_actor_kind(actor_kind)
             with self._mgr.transaction() as conn:
                 link = _create(
                     conn,
@@ -705,10 +976,25 @@ class Substrate:
         *,
         event_id: uuid.UUID | None = None,
     ) -> None:
+        """Remove a typed directed link between two work items.
+
+        Args:
+            from_work_item_id: Source work item.
+            to_work_item_id: Target work item.
+            link_type: The link type to remove.
+            actor_id: Authenticated actor.
+            actor_kind: ``"agent"`` | ``"human"`` | ``"system"``.
+            actor_metadata: Optional JSONB metadata.
+            event_id: UUIDv4 idempotency key.
+
+        Raises:
+            SubstrateError: ``LINK_NOT_FOUND``.
+        """
         from ._links import remove_link as _remove
 
         timer = OpTimer(self._project, "remove_link")
         try:
+            _validate_actor_kind(actor_kind)
             with self._mgr.transaction() as conn:
                 _remove(
                     conn,
@@ -729,6 +1015,15 @@ class Substrate:
             raise
 
     def replay(self, *, continue_on_revoked: bool = False) -> ReplayReport:
+        """Rebuild projection from the event log and compare with live state.
+
+        Args:
+            continue_on_revoked: Skip revoked-key events with warnings instead
+                of halting replay.
+
+        Returns:
+            ``ReplayReport`` with counts of ok, drift, halted, and warnings.
+        """
         from ._replay import replay as _replay
 
         timer = OpTimer(self._project, "replay")
@@ -754,6 +1049,14 @@ class Substrate:
             raise
 
     def requeue_dead_lettered_hook(self, dead_letter_id: int) -> None:
+        """Re-queue a dead-lettered hook for retry.
+
+        Args:
+            dead_letter_id: ID from ``list_dead_lettered_hooks``.
+
+        Raises:
+            SubstrateError: ``HOOK_NOT_FOUND``.
+        """
         from ._hooks import requeue_dead_lettered_hook as _requeue
 
         timer = OpTimer(self._project, "requeue_dead_lettered_hook")
@@ -767,6 +1070,11 @@ class Substrate:
             raise
 
     def list_dead_lettered_hooks(self) -> list[DeadLetterEntry]:
+        """List all dead-lettered hooks in reverse chronological order.
+
+        Returns:
+            List of ``DeadLetterEntry`` objects.
+        """
         from psycopg.sql import SQL
 
         with self._mgr.transaction() as conn:
@@ -804,6 +1112,22 @@ class Substrate:
         *,
         event_id: uuid.UUID | None = None,
     ) -> Event:
+        """Set or clear the ``not_before`` gate on a work item.
+
+        Args:
+            work_item_id: Target work item.
+            not_before: New gate timestamp, or ``None`` to clear.
+            actor_id: Authenticated actor.
+            actor_kind: ``"agent"`` | ``"human"`` | ``"system"``.
+            actor_metadata: Optional JSONB metadata.
+            event_id: UUIDv4 idempotency key.
+
+        Returns:
+            The ``not_before_set`` ``Event``.
+
+        Raises:
+            SubstrateError: ``WORK_ITEM_NOT_FOUND``.
+        """
         from psycopg.sql import SQL
 
         from ._events import append_event as _append_event
@@ -811,6 +1135,7 @@ class Substrate:
 
         timer = OpTimer(self._project, "update_not_before")
         try:
+            _validate_actor_kind(actor_kind)
             if event_id is None:
                 event_id = uuid.uuid4()
 
@@ -850,6 +1175,15 @@ class Substrate:
             raise
 
     def register_actor_role(self, actor_id: str, role: str) -> None:
+        """Register a role for an actor. Enables role enforcement for that actor.
+
+        Args:
+            actor_id: Actor identifier.
+            role: Role to register.
+
+        Raises:
+            SubstrateError: ``ACTOR_ROLE_ALREADY_REGISTERED``.
+        """
         from ._actor_roles import register_actor_role as _register
 
         timer = OpTimer(self._project, "register_actor_role")
@@ -862,6 +1196,15 @@ class Substrate:
             raise
 
     def unregister_actor_role(self, actor_id: str, role: str) -> None:
+        """Remove a role from an actor's registered set.
+
+        Args:
+            actor_id: Actor identifier.
+            role: Role to remove.
+
+        Raises:
+            SubstrateError: ``ACTOR_ROLE_NOT_REGISTERED``.
+        """
         from ._actor_roles import unregister_actor_role as _unregister
 
         timer = OpTimer(self._project, "unregister_actor_role")
@@ -874,6 +1217,14 @@ class Substrate:
             raise
 
     def list_actor_roles(self, actor_id: str | None = None) -> list[ActorRole]:
+        """List registered actor roles.
+
+        Args:
+            actor_id: Filter by actor, or ``None`` for all actors.
+
+        Returns:
+            List of ``ActorRole`` objects.
+        """
         from ._actor_roles import list_actor_roles as _list
 
         with self._mgr.transaction() as conn:
@@ -892,6 +1243,15 @@ class Substrate:
         event: Event,
         expected_schema: dict | None = None,
     ) -> list[str]:
+        """Lint helper: validate actor_metadata against recommended fields.
+
+        Args:
+            event: Event to inspect.
+            expected_schema: Optional JSON Schema to validate against.
+
+        Returns:
+            List of issue descriptions (empty if clean).
+        """
         from ._lint import validate_actor_metadata as _validate
 
         return _validate(event, expected_schema)

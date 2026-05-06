@@ -4,6 +4,38 @@ Structured log of development sessions and milestones.
 
 ---
 
+## 2026-05-06 — Session 7: Production readiness — migration packaging, metrics, validation, docstrings, spec sync, replay errors, test coverage
+
+**Focus:** Production readiness sweep addressing 7 items from comprehensive codebase audit
+
+**Context:** Session 6 left zero open breadcrumbs with 111 tests passing. All three phases (MVP, Phase 2, Phase 3) complete. User asked to clear breadcrumbs (none open) and begin next reasonable phase. A codebase audit identified 7 production-readiness items: critical migration discovery bug, unwired metric, missing validation, missing docstrings, stale spec.yaml, unstructured replay errors, and test coverage gaps.
+
+**Delivered:**
+
+1. **Migration discovery fix** — `_migrations.py:_migrations_dir()` now uses `importlib.resources.files("substrate").joinpath("migrations")` first (works in pip installs), falls back to parent-relative path for editable installs. `pyproject.toml` gains `force-include` to ship `migrations/` inside the wheel at `substrate/migrations/`.
+
+2. **`claims_stolen` metric wired** — `_claims.py:acquire_claim` now returns 3-tuple `(Claim, escalated, stolen)` where `stolen = prior_actor_id is not None`. `__init__.py:acquire_claim` increments `claims_stolen` metric when a claim is stolen.
+
+3. **`actor_kind` validation at API boundary** — New `_validate_actor_kind()` helper rejects invalid values (`"agent"`, `"human"`, `"system"` only) at all 6 API entry points that accept `actor_kind`.
+
+4. **Docstrings on all 30+ public methods** — Complete docstrings with Args, Returns, Raises sections on every public `Substrate` method.
+
+5. **`spec.yaml` updated to v4** — Phase 3 FRs (FR-24/25/26/27) reflected, resolved open questions removed from pending, delta-to-next-level pruned, Phase 3 decisions added to handoff.
+
+6. **Structured replay errors** — `_replay.py` now raises `_ReplayHaltError` (a private `Exception` subclass) instead of bare `RuntimeError`. Replay catches it cleanly.
+
+7. **New test coverage** — `tests/test_production_readiness.py` with 10 tests: 7 actor_kind validation tests (all 6 API entry points + valid kinds), transition event-id collision test, stolen claim event verification, same-actor re-acquire no-stolen verification.
+
+Plus 5 previously untracked test files committed: `test_key_lifecycle.py` (14 tests), `test_link_errors.py` (4 tests), `test_stale_heartbeat.py` (3 tests), `test_startup_integrity.py` (7 tests), `test_version_pinning.py` (3 tests), plus improved `test_smoke.py` assertions.
+
+**Breadcrumbs resolved:** None filed; none open before or after.
+
+**Test Results:** 154 passed in 37.3s (+ 3 slow benchmarks excluded)
+
+**Lint:** clean
+
+---
+
 ## 2026-05-06 — Session 6 with glm-5.1 (opencode): Phase 3 — actor roles, replay resilience, spec decisions, update_not_before, field validation, E2E tests
 
 **Focus:** Implement Phase 3 features and close spec gaps

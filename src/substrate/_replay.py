@@ -12,6 +12,10 @@ from ._types import ReplayReport
 
 log = structlog.get_logger()
 
+
+class _ReplayHaltError(Exception):
+    pass
+
 _EVENT_FIELDS = (
     "event_id, work_item_id, event_seq, actor_id, actor_kind, "
     "actor_metadata, key_id, workflow_name, workflow_version, "
@@ -85,7 +89,7 @@ def replay(
                 conn, wi_id, events, key_set, continue_on_revoked,
             )
             total_warnings += wi_warnings
-        except RuntimeError as e:
+        except _ReplayHaltError as e:
             halted_count += 1
             log.error("replay.halted", work_item_id=str(wi_id), error=str(e))
             conn.execute(
@@ -239,7 +243,7 @@ def _replay_work_item(
                     bytes(evt["canonical_envelope"]) if evt["canonical_envelope"] else None
                 ),
             ):
-                raise RuntimeError(
+                raise _ReplayHaltError(
                     f"Signature verification failed for event {evt['event_id']} "
                     f"at seq {evt['event_seq']}"
                 )
@@ -273,7 +277,7 @@ def _replay_work_item(
                 [evt["workflow_name"], evt["workflow_version"]],
             ).fetchone()
             if wf_row is None:
-                raise RuntimeError(
+                raise _ReplayHaltError(
                     f"Missing workflow {evt['workflow_name']!r} v{evt['workflow_version']}"
                 )
 
@@ -289,7 +293,7 @@ def _replay_work_item(
                     t["name"] == transition for t in defn.get("transitions", [])
                 )
                 if name_matches:
-                    raise RuntimeError(
+                    raise _ReplayHaltError(
                         f"Transition {transition!r} exists but not valid from state {state!r}"
                     )
 

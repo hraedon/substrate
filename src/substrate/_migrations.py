@@ -12,9 +12,12 @@ log = structlog.get_logger()
 
 def _migrations_dir() -> Path:
     pkg = importlib.resources.files("substrate")
-    candidate = Path(str(pkg)).parent.parent / "migrations"
+    candidate = Path(str(pkg)).joinpath("migrations")
     if candidate.is_dir():
         return candidate
+    fallback = Path(str(pkg)).parent.parent / "migrations"
+    if fallback.is_dir():
+        return fallback
     raise FileNotFoundError("Cannot locate migrations/ directory")
 
 

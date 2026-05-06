@@ -1,0 +1,127 @@
+from __future__ import annotations
+
+import uuid
+from pathlib import Path
+
+import pytest
+
+from substrate._errors import SubstrateError
+from substrate._testing import drop_project_schema
+
+TESTS_DIR = Path(__file__).parent
+DSN = "postgresql://substrate_test:substrate_test@localhost:5432/substrate_test"
+KEY_PATH = str(TESTS_DIR / "test_keys.json")
+WORKFLOW_PATH = str(TESTS_DIR / "test_workflow.yaml")
+
+
+@pytest.fixture
+def substrate():
+    from substrate import Substrate
+
+    project = f"test_links_{uuid.uuid4().hex[:8]}"
+    sub = Substrate.create_project(DSN, project, KEY_PATH)
+    sub.register_workflow_file(WORKFLOW_PATH)
+    yield sub
+    sub.close()
+    drop_project_schema(DSN, project)
+
+
+class TestLinkErrorPaths:
+    def test_disallowed_link_type_rejected(self, substrate):
+        wi1, _ = substrate.create_work_item(
+            workflow_name="test_workflow",
+            work_item_type="feature",
+            actor_id="agent-1",
+            custom_fields={"title": "A"},
+        )
+        wi2, _ = substrate.create_work_item(
+            workflow_name="test_workflow",
+            work_item_type="bug",
+            actor_id="agent-1",
+            custom_fields={"severity": "major"},
+        )
+        with pytest.raises(SubstrateError) as exc_info:
+            substrate.create_link(
+                from_work_item_id=wi2.work_item_id,
+                to_work_item_id=wi1.work_item_id,
+                link_type="blocks",
+                actor_id="agent-1",
+            )
+        assert exc_info.value.code == "LINK_TYPE_NOT_ALLOWED"
+
+    def test_link_target_not_found_rejected(self, substrate):
+        wi, _ = substrate.create_work_item(
+            workflow_name="test_workflow",
+            work_item_type="feature",
+            actor_id="agent-1",
+            custom_fields={"title": "A"},
+        )
+        phantom = uuid.uuid4()
+        with pytest.raises(SubstrateError) as exc_info:
+            substrate.create_link(
+                from_work_item_id=wi.work_item_id,
+                to_work_item_id=phantom,
+                link_type="blocks",
+                actor_id="agent-1",
+            )
+        assert exc_info.value.code == "LINK_TARGET_NOT_FOUND"
+
+    def test_remove_nonexistent_link_rejected(self, substrate):
+        wi1, _ = substrate.create_work_item(
+            workflow_name="test_workflow",
+            work_item_type="feature",
+            actor_id="agent-1",
+            custom_fields={"title": "A"},
+        )
+        wi2, _ = substrate.create_work_item(
+            workflow_name="test_workflow",
+            work_item_type="bug",
+            actor_id="agent-1",
+            custom_fields={"severity": "major"},
+        )
+        with pytest.raises(SubstrateError) as exc_info:
+            substrate.remove_link(
+                from_work_item_id=wi1.work_item_id,
+                to_work_item_id=wi2.work_item_id,
+                link_type="fixes",
+                actor_id="agent-1",
+            )
+        assert exc_info.value.code == "LINK_NOT_FOUND"
+
+    def test_link_removed_event_emitted(self, substrate):
+        wi1, _ = substrate.create_work_item(
+            workflow_name="test_workflow",
+            work_item_type="feature",
+            actor_id="agent-1",
+            custom_fields={"title": "A"},
+        )
+        wi2, _ = substrate.create_work_item(
+            workflow_name="test_workflow",
+            work_item_type="bug",
+            actor_id="agent-1",
+            custom_fields={"severity": "major"},
+        )
+        substrate.create_link(
+            from_work_item_id=wi1.work_item_id,
+            to_work_item_id=wi2.work_item_id,
+            link_type="fixes",
+            actor_id="agent-1",
+        )
+
+        events_before = substrate.read_events(work_item_id=wi1.work_item_id)
+        link_events_before = [e for e in events_before if e.transition == "link_created"]
+        assert len(link_events_before) == 1
+
+        substrate.remove_link(
+            from_work_item_id=wi1.work_item_id,
+            to_work_item_id=wi2.work_item_id,
+            link_type="fixes",
+            actor_id="agent-1",
+        )
+
+        events_after = substrate.read_events(work_item_id=wi1.work_item_id)
+        link_removed = [e for e in events_after if e.transition == "link_removed"]
+        assert len(link_removed) == 1
+
+        link_created = [e for e in events_after if e.transition == "link_created"]
+        assert len(link_created) == 1
