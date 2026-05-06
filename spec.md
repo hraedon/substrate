@@ -2,10 +2,11 @@
 
 **Spec Level:** 3
 **Desired Level:** 3
-**Date:** 2026-05-03 (revised 2026-05-05 — review pass v3)
+**Date:** 2026-05-03 (revised 2026-05-05 — review pass v3, 2026-05-05 — Phase 3 additions)
 **Extensions active:** None
 
 **Revision history:**
+- 2026-05-05 — v4: Phase 3 additions. FR-24 (actor → allowed_roles enforcement, closing BR-09 fast-follow). FR-25 (continue-on-revoked replay flag). AC-35/AC-36 added. §12 Phase 3 updated. §16 decision items resolved: actor role enforcement (implemented), retention policy (deferred with guidance), Postgres version (pinned to 15+). BR-09 updated from "deferred fast-follow" to "implemented."
 - 2026-05-05 — v3: integrated third reviewer pass on API shape and consumer expectations. Adds FR-05b (structured work-item query, MVP), §19 Public API Surface (substrate library as sole signer; service-wrapping is mechanical), §20 Consumer Expectation Boundary (explicit non-goals consumers commonly assume substrate provides), BR-13 (per-project DB isolation as load-bearing assumption with documented migration path), refinement to FR-15 (library-as-sole-signer clause). ACs 32–34 added. Reviewer points on links projection and signing envelope complexity were considered and held as designed.
 - 2026-05-05 — v2: integrated two-reviewer correctness pass. Adds API-layer idempotency, gap-free `event_seq` allocator + canonical lock target (§17), projection invariants (§18), HMAC-SHA256 + RFC 8785 canonical signing envelope, transition-validator vs hook split, custom-field type vocabulary, trust tiers on `actor_metadata`. Resolves §13 Q8 (domain-expert review).
 
@@ -121,7 +122,7 @@
 - FR-09b **[MVP]**: Auto-steal expired claims on next acquire; increment `attempt_number`; preserve prior claim history in event log.
 - FR-10: Flag `needs_review` and emit `escalated` event when `attempt_number` ≥ workflow-declared threshold. Idempotency: unique partial index `(work_item_id) WHERE event_type = 'escalated'`; second insert raises and is silently dropped.
 - FR-11 **[MVP]**: Validate state transitions against the **work-item's pinned workflow version** (not the latest); reject invalid transitions.
-- FR-12 **[MVP]**: Validate role-gating per transition against the work-item's pinned workflow version; reject if actor's declared role isn't permitted for that transition.
+- FR-12 **[MVP]**: Validate role-gating per transition against the work-item's pinned workflow version; reject if actor's declared role isn't permitted for that transition. If actor has registered roles (FR-24), the declared role must also be in the actor's registered set.
 - FR-13: Two distinct side-effect primitives on transitions, with materially different contracts:
 
   - **Transition validator (in-transaction, synchronous):** runs inside the same Postgres transaction as the event append, while the canonical lock is held (§17.2). Gates commit. Bound by workflow-declared timeout (substrate default 5s); timeout = failure = transaction rollback. **Must NOT perform I/O** — local computation only (validation, derivation, cross-field invariants, sanity checks). Validators that need to call out to other systems should instead enqueue an async hook.
@@ -144,7 +145,7 @@
   - **Trust tiers** (consumed by §17.9 and §11):
     - *Authenticated* — `actor_id`, `key_id` (HMAC-verified).
     - *Server-stamped* — `timestamp`, `event_seq` (substrate writes; not under actor control).
-    - *Actor-claimed* — `actor_metadata` (incl. `role`, `model`, `provider`, `role_source`) — signed by actor but not validated against any registry. Until actor → `allowed_roles` enforcement lands (BR-09 fast-follow), `role` is auditable but not authoritative.
+    - *Actor-claimed* — `actor_metadata` (incl. `role`, `model`, `provider`, `role_source`) — signed by actor but not validated against any registry. FR-24 provides opt-in enforcement: when an actor has registered roles, the claimed role is validated against the actor's allowed set; otherwise it is trusted.
 - FR-16 **[MVP]**: Replay — rebuild a `work_items_current_replay_<timestamp>` projection from the event log on demand. Each historical transition validates against the workflow version recorded on its event. Output is a fresh table; substrate does NOT mutate live `work_items_current` in place. Operator decides whether to atomically swap (rename) or diff for verification.
 
   Substrate also produces a companion `replay_report_<timestamp>` table categorizing each work-item:
@@ -152,8 +153,9 @@
   - `replayed_ok` — replayed final state matches live `work_items_current`.
   - `replayed_drift` — replayed final state differs from live. **This is the actionable signal.** Possible causes: bug in projection update logic, direct edit to `work_items_current` outside the substrate API (forbidden by §18), missed event (corruption — usually accompanied by `event_seq` gap).
   - `halted` — replay could not complete on this work-item; halt reason recorded (`revoked_key`, `missing_workflow_version`, `unrecognized_transition`, `signature_verification_failed`, etc.).
+  - `warnings` — count of events skipped during signature verification (when `continue_on_revoked=True`); informational, not a defect signal.
 
-  The report is the operator's primary interface to replay; comparison logic does not need to be authored per-replay. Nonzero `replayed_drift` count is a defect signal. `halted` rows are operator alerts; live projection is untouched on halt.
+  The report is the operator's primary interface to replay; comparison logic does not need to be authored per-replay. Nonzero `replayed_drift` count is a defect signal. `halted` rows are operator alerts; live projection is untouched on halt. Nonzero `warnings` count with zero `halted` and zero `drift` indicates a clean replay with historical key rotation.
 
 **Workflow definition (project-owned, declarative):**
 
@@ -191,6 +193,22 @@
 - FR-22 **[MVP]**: Create a link between work-items — validates target exists in same project DB, validates link type is allowed by workflow def for the work-item-type pair, records `link_created` event with `(from, to, type)`.
 - FR-23 **[MVP]**: Remove a link between work-items — records `link_removed` event with `(from, to, type)`. Previous link history remains in event log.
 
+**Actor authorization:**
+
+- FR-24: Actor → allowed_roles enforcement. New `actor_roles` table with `(actor_id, role)` unique rows. Public API: `register_actor_role(actor_id, role)`, `unregister_actor_role(actor_id, role)`, `list_actor_roles(actor_id=None)`. Enforcement semantics: during FR-12 role-gating, after checking the claimed role against the transition's `allowed_roles`, if the actor has any rows in `actor_roles`, the claimed role must also be in the actor's registered set. Actors with no registered roles are trusted (backward compatible with pre-FR-24 behavior). This is opt-in enforcement: registering a single role for an actor activates enforcement for that actor. Error code: `ACTOR_ROLE_NOT_AUTHORIZED` with detail including `actor_id`, `claimed_role`, and `allowed_roles`. Closes BR-09 fast-follow.
+
+**Replay:**
+
+- FR-25: `continue_on_revoked` replay flag. When `True`, replay skips signature verification for events signed with revoked or unknown keys, logs a structured warning per skipped event, and continues processing the work-item. The replay report's `warnings` count aggregates these skips. When `False` (default), behavior is unchanged: replay halts on revoked-key events. Use case: operator wants a complete replay report for audit despite having rotated keys, without halting on historical revoked-key events.
+
+**Scheduling:**
+
+- FR-26: `update_not_before()` — reschedule a work-item's `not_before` timestamp after creation. Emits a `not_before_set` event with the new timestamp (or `null` to clear). Updates the projection. Required because `not_before` is mutable (§18.2: "derived from the most recent `not_before_set` event") but had no API to produce updates. Claim acquisition (FR-06) continues to respect `not_before` regardless of when it was set.
+
+**Validation:**
+
+- FR-27: Custom field type validation at transition time. When a transition provides `custom_fields_update`, each field's value is validated against the work-item-type's field definition (same type vocabulary as FR-17: `string`, `integer`, `boolean`, `timestamp`, `json`, `enum`, `work_item_ref`). Unknown fields and type mismatches are rejected with `CUSTOM_FIELD_VIOLATION` before the transition proceeds. This extends creation-time validation (FR-02) to the update path.
+
 ---
 
 ## 6. Data
@@ -213,6 +231,7 @@
 - `claims` — current claim per work-item (or null), with `actor_id`, `acquired_at`, `expires_at`, `attempt_number`
 - `hook_queue` — pending async hooks with retry metadata
 - `hook_dead_letter` — terminally-failed async hooks (quarantine, replayable via FR-14)
+- `actor_roles` — per-actor role mappings for FR-24 enforcement; opt-in, backward compatible
 - `workflow_registry` — registered workflow definitions, append-only (versioned, immutable once referenced)
 - Migration metadata (substrate-managed, e.g., Alembic-equivalent)
 
@@ -230,7 +249,7 @@ Retention: indefinite for v1. Future move when needed: month-partition `events` 
 - BR-06: The substrate writes no project code, executes no project-supplied code outside of explicit hook contracts, and dispatches no notifications. All side effects are project-owned.
 - BR-07: Hooks are declarative-only at registration; their implementations are project-owned. The substrate dispatches; the substrate does not embed a sandbox.
 - BR-08: Postgres `now()` (transaction-stable) is the time authority. Agent-supplied clocks may live in `actor_metadata` for diagnostics but are not used for ordering or correctness.
-- BR-09: **Authorization is audit, not enforcement, in MVP.** HMAC verification proves `actor_id` (authenticated). The role used for role-gating (FR-12) is read from `actor_metadata.role` — an *actor-claimed* field, not validated against any registry. The substrate guarantees a *signed audit trail* of which actor claimed which role for each transition; it does NOT guarantee the actor was entitled to claim that role. In a single-operator homelab where all actors are operator-controlled, this is acceptable. The moment a second human or untrusted agent enters the system, it is a breach. Mitigations available without schema change: (1) `actor_metadata.role_source` ("config" / "env" / "prompt") for post-hoc audit of misdeclaration sources; (2) FR-12 validates the claimed role against the workflow's declared role list (catches "claimed role doesn't exist in workflow," not "actor X falsely claimed admin"). Actor → `allowed_roles` enforcement (one table, one verifier check) is a documented fast-follow; design space is reserved.
+- BR-09: **Authorization is enforced when actor roles are registered; audit-only when not.** HMAC verification proves `actor_id` (authenticated). The role used for role-gating (FR-12) is read from `actor_metadata.role` — an *actor-claimed* field. FR-24 adds an `actor_roles` table mapping `actor_id → allowed_roles`. When an actor has registered roles, FR-12 enforces that the claimed role is in the actor's registered set (rejects with `ACTOR_ROLE_NOT_AUTHORIZED` if not). When an actor has no registered roles, the claimed role is trusted (backward compatible with MVP behavior). The substrate guarantees a *signed audit trail* of which actor claimed which role for each transition; FR-24 makes this enforceable on a per-actor basis. `actor_metadata.role_source` ("config" / "env" / "prompt") provides post-hoc audit of misdeclaration sources.
 
 - BR-10: **Concurrency contract.** Every event-producing operation on a work-item acquires a row lock on the canonical lock target (the work-item's row in `work_items_current`) via `SELECT FOR UPDATE` at the start of the transaction. All mutations on a given work-item serialize through this lock. Cross-work-item operations (links) acquire both rows in ascending `work_item_id` order to prevent deadlock. Isolation level: READ COMMITTED. See §17.
 
@@ -271,6 +290,9 @@ Retention: indefinite for v1. Future move when needed: month-partition `events` 
 | NOTIFY payload would exceed 8KB | Hook event payload large | Library always uses wakeup-only NOTIFY (event_id reference); consumer reads full payload from `hook_queue` | Internal — not surfaced |
 | Replay drift detected | Replay output differs from live `work_items_current` | Record in `replay_report` as `replayed_drift`; replay continues; operator action required | Operator alert via report |
 | Concurrent workflow version registration | Two registrations of same `(name, version)` | Same content → idempotent (returns existing row); different content → rejects with `WORKFLOW_VERSION_CONFLICT` | Caller sees idempotent success or rejection |
+| Actor role not authorized | Actor claims role not in their registered set | Reject with `ACTOR_ROLE_NOT_AUTHORIZED`; detail includes `actor_id`, `claimed_role`, `allowed_roles` | Caller sees rejection |
+| Actor role already registered | Duplicate `register_actor_role` for same `(actor_id, role)` | Reject with `ACTOR_ROLE_ALREADY_REGISTERED` | Caller sees rejection |
+| Actor role not registered | `unregister_actor_role` for nonexistent mapping | Reject with `ACTOR_ROLE_NOT_REGISTERED` | Caller sees rejection |
 | Validator performs I/O (contract violation) | Validator code calls out to network/disk | Behavior undefined; operator-actionable structured log; treat as bug | Structured log |
 
 ---
@@ -313,7 +335,9 @@ When resolving any of these during implementation, the implementing agent must e
 | Deployment shape | Decided | Library. Substrate is imported and called as Python; runs in-process; talks directly to Postgres. Non-Python projects deferred (migration to sidecar would be additive). |
 | Workflow file composition | Deferred with flexibility | Single-file workflows in v1. Loader can grow `!include` / merge conventions later without breaking existing files. |
 | Schema partitioning policy | Deferred with flexibility | No partitioning in v1. Month-partition the `events` table when volume justifies; cheap to add. |
-| Actor → allowed_roles mapping | Deferred with flexibility | MVP trusts authenticated actors not to misdeclare role. Adding actor-to-role mapping later requires no schema migration to the core. |
+| Actor → allowed_roles mapping | Decided | Implemented as FR-24 (Phase 3). `actor_roles` table; opt-in enforcement; backward compatible. Closes BR-09. |
+| `continue_on_revoked` replay flag | Decided | Implemented as FR-25 (Phase 3). Replay skips revoked-key events with warning logging when flag is `True`. |
+| Postgres version | Decided | Postgres 15+ required. No earlier-version compatibility guarantee. |
 | Concurrency contract | Decided | Canonical lock = `work_items_current` row; `SELECT FOR UPDATE`; isolation READ COMMITTED; cross-work-item ordering ascending `work_item_id`. Specified in §17. |
 | `event_seq` allocator | Decided | Gap-free per-work-item, allocated under canonical lock (§17.4). Trade-off: marginally slower per-write vs. dramatically simpler downstream consumer contract (no gap-handling logic). |
 | Signing envelope | Decided | HMAC-SHA256 over RFC 8785 (JCS) canonical JSON of `{event_id, work_item_id, actor_id, transition, payload}`. Server-stamped fields excluded. Canonical hash stored alongside signature for jsonb-independent re-verification. |
@@ -362,6 +386,10 @@ When resolving any of these during implementation, the implementing agent must e
 - AC-32 [FR-05b]: A query with multiple filters (e.g., `workflow_name=X AND current_state IN (a, b) AND claimable_now=true`) returns exactly the work-items satisfying all filters. Pagination with the stable `work_item_id` cursor returns subsequent pages with no overlap and no skip, even when work-items matching the filter are concurrently appended-to during the scan (the cursor ordering is independent of `last_event_seq`). Indexes ensure p99 < NFR-perf-1 latency at expected scale.
 - AC-33 [FR-15 / §19.2]: The public API rejects any attempt to submit a pre-signed event (a request shape carrying a caller-supplied `signature` or `payload_canonical_hash` field is refused with "library is sole signer"). Verified by attempting to construct such a request via the public API and observing the rejection.
 - AC-34 [§19.4]: No public API type signature exposes a Postgres connection, cursor, session, ORM model, migration object, raw SQL string, or jsonb canonicalization helper. Verified by static inspection of the public API module's exports against the forbidden list in §19.4.
+- AC-35 [FR-24]: An actor with no registered roles can perform any transition whose `allowed_roles` includes their claimed role (backward compatible). An actor with registered roles who claims a role NOT in their registered set is rejected with `ACTOR_ROLE_NOT_AUTHORIZED`, even if that role is in the transition's `allowed_roles`. An actor with registered roles who claims a role IN their registered set is accepted. Error detail includes `actor_id`, `claimed_role`, `allowed_roles`.
+- AC-36 [FR-25]: `replay(continue_on_revoked=True)` produces a report with `halted == 0` and `warnings >= N` where N is the number of events signed with revoked or unknown keys, and the replayed state matches the live projection for all work-items. `replay(continue_on_revoked=False)` halts on the first revoked-key event (unchanged behavior).
+- AC-37 [FR-26]: `update_not_before()` emits a `not_before_set` event and updates the projection. Subsequent `acquire_claim()` respects the new value. Setting to `null` clears the gate. Replay correctly derives `not_before` from the most recent `not_before_set` event.
+- AC-38 [FR-27]: A transition with `custom_fields_update` containing an invalid enum value, unknown field name, or wrong type is rejected with `CUSTOM_FIELD_VIOLATION`. No partial write occurs. Valid updates are applied and persisted in both the event payload and the projection.
 
 **Untestable items:**
 
@@ -380,7 +408,8 @@ When resolving any of these during implementation, the implementing agent must e
 
 - **Phase 1 (MVP):** FR-01, FR-02, FR-03, FR-04, FR-05, FR-05b, FR-06, FR-07, FR-08, FR-09a, FR-09b, FR-11, FR-12, FR-15, FR-16, FR-17, FR-19, FR-20, FR-21, FR-22, FR-23 — substrate replaces `reasoning.log` for one Software Factory workflow with durable claims, role enforcement, replay, structured work-item discovery, and observability.
 - **Phase 2 (Fast-follow):** FR-10 (escalation flag), FR-13 (hooks), FR-14 (dead-letter requeue), FR-18 (lint helper) — adds reactivity once consumers exist.
-- **Phase 3 (Future):** Federated UI; OIDC verifier; actor → allowed_roles mapping; workflow file composition; month-partitioning for high-volume projects; `--continue-on-revoked` replay flag.
+- **Phase 3 (Authorization + replay resilience):** FR-24 (actor → allowed_roles enforcement), FR-25 (continue-on-revoked replay flag) — closes BR-09; makes replay practical after key rotation.
+- **Phase 4 (Future):** Federated UI; OIDC verifier; workflow file composition; month-partitioning for high-volume projects.
 
 ### Implementation Phasing — owned by the implementing agent
 
@@ -405,20 +434,19 @@ The implementing agent determines build sequence based on architectural dependen
 | Question | Category | Owner |
 |---|---|---|
 | Workflow file composition (`!include` / cross-file merge) | Cheap to change | Implementing agent — additive |
-| Substrate library version → Postgres major version compatibility matrix | Needs research | Implementing agent — resolved during build |
 | Per-hook retry override defaults — what's the right per-hook tuning? | Cheap to change | Project authors at use time |
-| Actor → `allowed_roles` enforcement | Cheap to change | Operator — fast-follow when threat model warrants |
 | Disk-level durability / backup policy | Out of scope | Operator |
 | Real scheduler beyond `not_before` | Cheap to change | Future scope; `not_before` reserves the design space |
-| `--continue-on-revoked` replay flag | Cheap to change | Operator tooling, deferred |
-| ~~Domain-expert review for distributed-systems correctness~~ | **Resolved 2026-05-05** | Two-reviewer correctness pass completed. Findings integrated into spec v2 (§17, §18, FR-03 / FR-13 / FR-15 / FR-16 / FR-17 revisions, BR-09 strengthened, BR-10 / BR-11 / BR-12 added, error table extended, ACs 24–31 added). |
+| ~~Actor → `allowed_roles` enforcement~~ | **Resolved v4** | Implemented as FR-24. |
+| ~~`--continue-on-revoked` replay flag~~ | **Resolved v4** | Implemented as FR-25. |
+| ~~Domain-expert review for distributed-systems correctness~~ | **Resolved v2** | Two-reviewer correctness pass completed. |
 
 ---
 
 ## 14. Assumptions
 
 - Postgres is available on the homelab K3s cluster and is healthy enough to provide standard ACID semantics. Rationale: explicitly stated in vibe spec.
-- The operator runs all agents and trusts them not to misdeclare their role at MVP. Rationale: stated threat model boundary; documented in BR-09 and as fast-follow.
+- The operator runs all agents and trusts them not to misdeclare their role by default (actor-claimed trust tier). FR-24 provides opt-in enforcement when the threat model warrants it. Rationale: homelab single-operator context; enforcement is available but not required.
 - Workflow files are authored by the operator (not by untrusted parties). Rationale: homelab single-operator context; YAML parsing safety follows from this.
 - License-cost-bound but token-spend unconstrained — substrate may be liberal with logging detail and event payload size. Rationale: stated explicitly in vibe spec.
 - Federated UI design is downstream and will adapt to the substrate's contract, not vice versa. Rationale: vibe spec states UI is future; substrate is authoritative source.
@@ -452,15 +480,19 @@ The implementing agent determines build sequence based on architectural dependen
 - **(v3)** Public API surface formalized (§19): protocol, not a Postgres connection. Substrate library is the sole sanctioned signer; canonicalization is internal. Service-wrapping is mechanical, not architectural.
 - **(v3)** Consumer expectation boundary (§20): explicit enumeration of what substrate does NOT do (dwell-time monitoring, work distribution, sagas, scheduling, notifications, SLAs, hierarchy rollups, role enforcement, project code execution).
 - **(v3)** Per-project DB isolation (BR-13) acknowledged as load-bearing; migration path to tenant_id-in-shared-DB documented. API surface unchanged either way.
+- **(v4)** Actor → allowed_roles enforcement (FR-24): opt-in enforcement via `actor_roles` table. Actors with no registered roles are trusted; actors with registered roles must claim a role in their set. Closes BR-09.
+- **(v4)** Continue-on-revoked replay flag (FR-25): `replay(continue_on_revoked=True)` skips revoked-key events with warnings instead of halting. `ReplayReport.warnings` tracks count.
+- **(v4)** Postgres version pinned to 15+. Retention policy: always-grow at homelab scale; month-partition at 1M events.
+- **(v4)** `update_not_before()` API (FR-26): closes the spec gap where `not_before_set` events existed in replay but no API could produce them. Emits event, updates projection, supports idempotency.
+- **(v4)** Custom field validation at transitions (FR-27): extends creation-time validation (FR-02) to the update path. Rejects unknown fields and type mismatches in `custom_fields_update`.
 
 **Pending / deferred:**
+- Event log retention policy: always-grow at homelab scale; month-partition at 1M events per project (see §16).
 - Workflow file composition (`!include`): deferred; loader extension is additive.
-- Schema partitioning for `events` table: deferred; cheap to add when volume warrants.
-- Actor → `allowed_roles` enforcement: deferred fast-follow when threat model warrants.
-- `--continue-on-revoked` replay flag: deferred operator-tooling concern.
+- Schema partitioning for `events` table: deferred; cheap to add when volume warrants (see §16 for trigger threshold).
+- `--continue-on-revoked` replay flag: ~~deferred operator-tooling concern~~ **Implemented as FR-25.**
 - OIDC verifier implementation: deferred until human users arrive.
 - Sidecar / non-Python integration: deferred until needed.
-- Domain-expert review pass for distributed-systems correctness: recommended before MVP build begins; recorded as a flagged concern.
 
 **Intent signals (from the original vibe spec):**
 - *"Generalize it and have it work for all projects more generally"* — relevance: substrate must be project-agnostic; resist factory-specific concepts leaking into core schema.
@@ -478,12 +510,12 @@ The implementing agent determines build sequence based on architectural dependen
 
 What would be required to reach Level 3:
 
-- Resolve domain-expert review pass: distributed-systems correctness review of the event-sourcing + transactional-projection model, the sync/async hook semantics, the claim race conditions, and the replay-into-fresh-table approach. Confirms or corrects the implicit-correctness assumptions.
-- Decide actor → `allowed_roles` mapping concretely (in or out for v2; if in, the data model adjustment needed).
-- Decide event log retention policy concretely (always-grow vs. month-partition trigger threshold vs. archival-to-cold-storage SOP).
-- Decide on a workflow file composition mechanism if and when needed (or formally drop it).
-- Pin Postgres major version supported and document the matrix.
-- Decide initial workflow definition for the first Software Factory pilot — needed before MVP can ship, but is a downstream artifact, not a substrate concern.
+- ~~Resolve domain-expert review pass: distributed-systems correctness review of the event-sourcing + transactional-projection model, the sync/async hook semantics, the claim race conditions, and the replay-into-fresh-table approach.~~ **Resolved v2.** Two-reviewer correctness pass completed.
+- ~~Decide actor → `allowed_roles` mapping concretely (in or out for v2; if in, the data model adjustment needed).~~ **Resolved v4.** Implemented as FR-24. Opt-in enforcement via `actor_roles` table. Backward compatible.
+- Decide event log retention policy concretely (always-grow vs. month-partition trigger threshold vs. archival-to-cold-storage SOP). **Deferred with guidance:** always-grow is correct for homelab scale (≤10k work-items, ≤100k events per project). Month-partition the `events` table when any single project exceeds 1M events. Operator-driven archival is a separate concern. No substrate code change needed for partitioning — Postgres declarative partitioning with `PARTITION BY RANGE (timestamp)` is a one-time migration per project.
+- Decide on a workflow file composition mechanism if and when needed (or formally drop it). **Deferred.** Single-file workflows in v1. Loader can grow `!include` / merge conventions later without breaking existing files. No concrete need identified.
+- Pin Postgres major version supported and document the matrix. **Decided v4.** Postgres 15+ required (used in test infrastructure; features used: JSONB, LISTEN/NOTIFY, `FOR UPDATE` row locks, declarative partitioning available when needed). No Postgres-14-or-earlier compatibility guarantee.
+- Decide initial workflow definition for the first Software Factory pilot — needed before MVP can ship, but is a downstream artifact, not a substrate concern. **Not a substrate decision.** Operator defines the pilot workflow.
 
 ---
 
@@ -567,7 +599,7 @@ Consumers (UI, audit tooling, replay validators) MUST distinguish:
 |---|---|---|
 | Authenticated | `actor_id`, `key_id` | HMAC-verified; tampering detected at re-verification (AC-26) |
 | Server-stamped | `timestamp`, `event_seq` | Substrate writes; not under actor control; trustworthy modulo substrate bugs |
-| Actor-claimed | All of `actor_metadata` (incl. `role`, `model`, `provider`, `role_source`) | Signed-by-actor (so non-repudiable that *this actor said this*) but not validated against any registry. Treat as diagnostic until actor → `allowed_roles` enforcement lands (BR-09). |
+| Actor-claimed | All of `actor_metadata` (incl. `role`, `model`, `provider`, `role_source`) | Signed-by-actor (so non-repudiable that *this actor said this*). When FR-24 actor roles are registered, `role` is additionally enforced against the actor's registered set; otherwise treated as diagnostic. |
 
 The federated UI and downstream consumers should surface this distinction visually (e.g., role displayed with a "claimed" qualifier until enforcement lands) rather than treating all event fields as equally authoritative.
 
@@ -701,7 +733,7 @@ Substrate does NOT:
 - **Notify, page, alert, or message anyone.** Escalation emits an event; consumers wire up the rest. Substrate sends no email, Slack, webhook, or push notification except via project-defined hooks the project itself implements.
 - **Enforce SLAs or deadlines.** No "must complete by" semantics, no deadline timers, no auto-cancel on missed deadline.
 - **Track work hierarchies or rollups.** Parent/child relationships are link-type conventions; substrate does not aggregate state ("all children done → parent ready"). Hierarchy semantics are project-defined via link types and consumer-side queries.
-- **Validate that an actor's claimed role is one the actor is entitled to claim.** Role is *actor-claimed* (BR-09 / §17.9). Authorization enforcement is fast-follow.
+- **Validate that an actor's claimed role is one the actor is entitled to claim.** FR-24 provides opt-in enforcement: when an actor has registered roles via `register_actor_role`, the claimed role is validated against the actor's allowed set. When no roles are registered for an actor, the claimed role is trusted (actor-claimed per §17.9). Full RBAC (hierarchical roles, role derivation, dynamic role assignment) is not provided — consumers needing richer authorization layer such a system above substrate.
 - **Run project code in-process beyond the validator/hook contracts.** No sandbox, no in-process plugins, no expression language. Project authors own all side-effect code.
 - **Provide a workflow execution engine.** Substrate is a state record with transition validation; it is not Temporal. Consumers needing durable execution semantics (timers, retries-as-orchestration-primitive, child workflows, signals) layer such an engine above and use substrate as the state plane.
 

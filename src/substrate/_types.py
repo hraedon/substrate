@@ -429,14 +429,18 @@ class ReplayReport:
     replayed_ok: int
     replayed_drift: int
     halted: int
+    warnings: int = 0
 
     def to_dict(self) -> dict:
-        return {
+        d = {
             "table_name": self.table_name,
             "replayed_ok": self.replayed_ok,
             "replayed_drift": self.replayed_drift,
             "halted": self.halted,
         }
+        if self.warnings > 0:
+            d["warnings"] = self.warnings
+        return d
 
     @classmethod
     def from_dict(cls, data: dict) -> ReplayReport:
@@ -445,6 +449,7 @@ class ReplayReport:
             replayed_ok=data["replayed_ok"],
             replayed_drift=data["replayed_drift"],
             halted=data["halted"],
+            warnings=data.get("warnings", 0),
         )
 
 
@@ -518,6 +523,28 @@ class HookContext:
             "transition": self.transition,
             "payload": self.payload,
         }
+
+
+@dataclass(frozen=True)
+class ActorRole:
+    actor_id: str
+    role: str
+    created_at: datetime
+
+    def to_dict(self) -> dict:
+        return {
+            "actor_id": self.actor_id,
+            "role": self.role,
+            "created_at": self.created_at.isoformat(),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> ActorRole:
+        return cls(
+            actor_id=data["actor_id"],
+            role=data["role"],
+            created_at=datetime.fromisoformat(data["created_at"]),
+        )
 
 
 @dataclass(frozen=True)

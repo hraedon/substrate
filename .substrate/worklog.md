@@ -4,6 +4,62 @@ Structured log of development sessions and milestones.
 
 ---
 
+## 2026-05-06 — Session 6 with glm-5.1 (opencode): Phase 3 — actor roles, replay resilience, spec decisions, update_not_before, field validation, E2E tests
+
+**Focus:** Implement Phase 3 features and close spec gaps
+
+**Context:** Session 5 left zero open breadcrumbs with 81 tests passing. Phase 1 (MVP) and Phase 2 (hooks/escalation) were complete. The user asked for three areas of work: actor → allowed_roles enforcement, continue-on-revoked replay flag, and §16 decision sweep. After those were delivered, the user approved a second batch: update_not_before API, custom field validation at transitions, and E2E integration tests.
+
+**Delivered:**
+
+FR-24 — Actor → allowed_roles enforcement (closes BR-09):
+- `migrations/005_actor_roles.sql`: new `actor_roles` table with `(actor_id, role)` PK
+- `src/substrate/_actor_roles.py`: register, unregister, list, enforcement check functions
+- `src/substrate/__init__.py`: public API `register_actor_role()`, `unregister_actor_role()`, `list_actor_roles()`
+- `src/substrate/__init__.py`: enforcement wired into `transition()` — opt-in, backward compatible
+- `src/substrate/_errors.py`: new error codes `ACTOR_ROLE_NOT_AUTHORIZED`, `ACTOR_ROLE_ALREADY_REGISTERED`, `ACTOR_ROLE_NOT_REGISTERED`
+- `src/substrate/_types.py`: new `ActorRole` frozen dataclass
+- 9 tests in `tests/test_phase3.py`
+
+FR-25 — Continue-on-revoked replay flag:
+- `src/substrate/_replay.py`: `replay()` and `_replay_work_item()` accept `continue_on_revoked` flag; skips revoked-key events with structured warnings; returns warning count
+- `src/substrate/__init__.py`: public `replay(continue_on_revoked=True)` API
+- `src/substrate/_types.py`: `ReplayReport` gains `warnings` field (default 0)
+- `src/substrate/_replay.py`: report table gains `warnings` column
+- 4 tests in `tests/test_phase3.py`
+
+FR-26 — update_not_before API:
+- `src/substrate/__init__.py`: public `update_not_before()` method — emits `not_before_set` event, updates projection
+- 5 tests in `tests/test_phase3.py`
+
+FR-27 — Custom field validation at transitions:
+- `src/substrate/_workflow.py`: new `validate_field_update()` function — validates `custom_fields_update` against work-item-type field definitions
+- `src/substrate/__init__.py`: wired into `transition()` before event append
+- 5 tests in `tests/test_phase3.py`
+
+E2E integration tests:
+- `tests/test_e2e.py`: 4 tests exercising realistic multi-agent workflows (full pipeline, not_before deferral, linked items, role enforcement)
+
+§16 Decision sweep:
+- Actor roles: implemented (FR-24)
+- Postgres version: pinned to 15+
+- Retention: always-grow at homelab scale; month-partition at 1M events
+- Spec updated to v4 with all decisions resolved
+
+Spec updates:
+- `spec.md`: v4 revision — FR-24/25/26/27, AC-35/36/37/38, BR-09 rewrite, §12/§13/§15/§16/§17.9/§20 updates, handoff state
+- `AGENTS.md`: status, source layout, public API updated
+
+**Breadcrumbs resolved:** None new filed. All prior breadcrumbs remain resolved.
+
+**Remaining open:** None.
+
+**Test Results:** 111 passed in 33.5s (+ 3 slow benchmarks excluded)
+
+**Lint:** clean
+
+---
+
 ## 2026-05-05 — Session 5: BC-022 content-based idempotency, BC-023/024/025 feature work, BC-009/016/017 final closeout
 
 **Focus:** Implement 6 breadcrumbs, resolve all remaining open items

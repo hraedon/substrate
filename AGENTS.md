@@ -41,6 +41,7 @@ src/substrate/
   _integrity.py     # Startup version compatibility checks
   _workflow.py      # YAML parse, JSON Schema validate, semantic checks
   _hooks.py         # Sync validators + async hook consumer (FR-13)
+  _actor_roles.py   # Actor → role registration and enforcement (FR-24)
   _lint.py          # Actor metadata lint helper (FR-18)
   _signing.py       # HMAC-SHA256 signing/verification
   _jcs.py           # RFC 8785 JSON Canonicalization Scheme (rfc8785 lib)
@@ -96,6 +97,7 @@ sub.read_events(work_item_id=...)
 sub.create_link(from_id, to_id, link_type, actor_id, payload=...)
 sub.remove_link(from_id, to_id, link_type, actor_id)
 sub.replay()  # -> ReplayReport with drift detection
+sub.replay(continue_on_revoked=True)  # skip revoked-key events with warnings
 sub.close()
 
 # Phase 2 — hooks, validators, escalation, lint
@@ -107,6 +109,12 @@ sub.poll_hooks()                                   # manual drain (in lieu of co
 sub.list_dead_lettered_hooks()
 sub.requeue_dead_lettered_hook(hook_id)
 sub.validate_actor_metadata(metadata, schema=None)  # lint helper (FR-18)
+
+# Phase 3 — actor role enforcement, replay resilience
+sub.update_not_before(work_item_id, not_before, actor_id)  # reschedule work item
+sub.register_actor_role(actor_id, role)              # register actor → role mapping
+sub.unregister_actor_role(actor_id, role)            # remove actor → role mapping
+sub.list_actor_roles(actor_id=None)                  # list registered roles
 ```
 
 **API constraints:**
@@ -125,9 +133,9 @@ sub.validate_actor_metadata(metadata, schema=None)  # lint helper (FR-18)
 
 ## Status
 
-MVP + Phase 2 implemented. All FRs FR-01 through FR-23 are now in tree. 81 tests + 3 scale benchmarks passing across 9 files (smoke, signing, replay, idempotency, concurrency, api_surface, phase2, jcs, scale). All breadcrumbs resolved.
+MVP + Phase 2 + Phase 3 implemented. All FRs FR-01 through FR-27 are now in tree. 111 tests + 3 scale benchmarks passing across 11 files (smoke, signing, replay, idempotency, concurrency, api_surface, phase2, phase3, e2e, jcs, scale). All breadcrumbs resolved.
 
-Phase 2 additions: FR-10 (escalation), FR-13 (hooks/validators), FR-14 (dead-letter requeue), FR-18 (lint helper). Migration `003_escalation_idempotency.sql` adds the partial unique index that backstops escalation idempotency.
+Phase 3 additions: FR-24 (actor → allowed_roles enforcement, closes BR-09), FR-25 (continue-on-revoked replay flag), FR-26 (update_not_before API), FR-27 (custom field validation at transition time). Migration `005_actor_roles.sql` adds the actor_roles table. ReplayReport gains `warnings` field.
 
 ## Conventions
 

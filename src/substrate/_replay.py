@@ -24,6 +24,7 @@ def replay(
     schema: str,
     project: str,
     key_set: KeySet,
+    continue_on_revoked: bool = False,
 ) -> ReplayReport:
     import uuid as _uuid
 
@@ -52,7 +53,8 @@ def replay(
             "CREATE TABLE {} ("
             "work_item_id UUID PRIMARY KEY, "
             "category TEXT NOT NULL, "
-            "detail TEXT)"
+            "detail TEXT, "
+            "warnings INTEGER NOT NULL DEFAULT 0)"
         ).format(Identifier(report_table))
     )
 
@@ -63,6 +65,7 @@ def replay(
     ok_count = 0
     drift_count = 0
     halted_count = 0
+    total_warnings = 0
 
     for row in wi_rows:
         wi_id = row["work_item_id"]
@@ -78,15 +81,19 @@ def replay(
             continue
 
         try:
-            replayed_state = _replay_work_item(conn, wi_id, events, key_set)
+            replayed_state, wi_warnings = _replay_work_item(
+                conn, wi_id, events, key_set, continue_on_revoked,
+            )
+            total_warnings += wi_warnings
         except RuntimeError as e:
             halted_count += 1
             log.error("replay.halted", work_item_id=str(wi_id), error=str(e))
             conn.execute(
                 SQL(
-                    "INSERT INTO {} (work_item_id, category, detail) VALUES (%s, %s, %s)"
+                    "INSERT INTO {} (work_item_id, category, detail, warnings) "
+                    "VALUES (%s, %s, %s, %s)"
                 ).format(Identifier(report_table)),
-                [wi_id, "halted", str(e)],
+                [wi_id, "halted", str(e), 0],
             )
             continue
         except Exception as e:
@@ -97,9 +104,10 @@ def replay(
             )
             conn.execute(
                 SQL(
-                    "INSERT INTO {} (work_item_id, category, detail) VALUES (%s, %s, %s)"
+                    "INSERT INTO {} (work_item_id, category, detail, warnings) "
+                    "VALUES (%s, %s, %s, %s)"
                 ).format(Identifier(report_table)),
-                [wi_id, "halted", f"unexpected: {e}"],
+                [wi_id, "halted", f"unexpected: {e}", 0],
             )
             continue
 
@@ -118,9 +126,9 @@ def replay(
             ok_count += 1
             conn.execute(
                 SQL(
-                    "INSERT INTO {} (work_item_id, category) VALUES (%s, %s)"
+                    "INSERT INTO {} (work_item_id, category, warnings) VALUES (%s, %s, %s)"
                 ).format(Identifier(report_table)),
-                [wi_id, "replayed_ok"],
+                [wi_id, "replayed_ok", wi_warnings],
             )
         else:
             drift_count += 1
@@ -134,9 +142,10 @@ def replay(
             )
             conn.execute(
                 SQL(
-                    "INSERT INTO {} (work_item_id, category, detail) VALUES (%s, %s, %s)"
+                    "INSERT INTO {} (work_item_id, category, detail, warnings) "
+                    "VALUES (%s, %s, %s, %s)"
                 ).format(Identifier(report_table)),
-                [wi_id, "replayed_drift", detail],
+                [wi_id, "replayed_drift", detail, wi_warnings],
             )
 
         conn.execute(
@@ -169,6 +178,7 @@ def replay(
         replayed_ok=ok_count,
         replayed_drift=drift_count,
         halted=halted_count,
+        warnings=total_warnings,
     )
 
 
@@ -185,36 +195,54 @@ def _replay_work_item(
     wi_id,
     events: list[dict],
     key_set: KeySet,
-) -> dict:
+    continue_on_revoked: bool = False,
+) -> tuple[dict, int]:
     state = None
     custom_fields: dict = {}
     needs_review = False
     not_before: datetime | None = None
     last_seq = 0
+    warnings = 0
 
     for evt in events:
         transition = evt["transition"]
         last_seq = evt["event_seq"]
 
-        key_entry = key_set.verify_key_status(evt["key_id"])
+        key_entry = None
+        try:
+            key_entry = key_set.verify_key_status(evt["key_id"])
+        except Exception as e:
+            if continue_on_revoked:
+                warnings += 1
+                log.warning(
+                    "replay.revoked_key_skipped",
+                    work_item_id=str(wi_id),
+                    event_id=str(evt["event_id"]),
+                    event_seq=evt["event_seq"],
+                    key_id=evt["key_id"],
+                    error=str(e),
+                )
+            else:
+                raise
 
-        if not verify_event(
-            event_id=evt["event_id"],
-            work_item_id=evt["work_item_id"],
-            actor_id=evt["actor_id"],
-            transition=evt["transition"],
-            payload=evt["payload"],
-            signature=bytes(evt["signature"]),
-            canonical_hash=bytes(evt["payload_canonical_hash"]),
-            key=key_entry.secret,
-            stored_envelope=(
-                bytes(evt["canonical_envelope"]) if evt["canonical_envelope"] else None
-            ),
-        ):
-            raise RuntimeError(
-                f"Signature verification failed for event {evt['event_id']} "
-                f"at seq {evt['event_seq']}"
-            )
+        if key_entry is not None:
+            if not verify_event(
+                event_id=evt["event_id"],
+                work_item_id=evt["work_item_id"],
+                actor_id=evt["actor_id"],
+                transition=evt["transition"],
+                payload=evt["payload"],
+                signature=bytes(evt["signature"]),
+                canonical_hash=bytes(evt["payload_canonical_hash"]),
+                key=key_entry.secret,
+                stored_envelope=(
+                    bytes(evt["canonical_envelope"]) if evt["canonical_envelope"] else None
+                ),
+            ):
+                raise RuntimeError(
+                    f"Signature verification failed for event {evt['event_id']} "
+                    f"at seq {evt['event_seq']}"
+                )
 
         if transition == "created":
             payload = evt["payload"] or {}
@@ -275,7 +303,7 @@ def _replay_work_item(
         "needs_review": needs_review,
         "not_before": not_before,
         "last_event_seq": last_seq,
-    }
+    }, warnings
 
 
 def _states_match(replayed: dict, live: dict) -> bool:

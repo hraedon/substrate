@@ -36,6 +36,7 @@ from ._types import (
     ActorKind as ActorKind,
 )
 from ._types import (
+    ActorRole,
     Claim,
     DeadLetterEntry,
     Event,
@@ -414,6 +415,12 @@ class Substrate:
                             ErrorCode.ROLE_NOT_PERMITTED,
                             f"Role {role!r} not permitted for transition {transition_name!r}",
                         )
+                    from ._actor_roles import check_actor_role_authorized
+                    check_actor_role_authorized(conn, actor_id, role)
+
+                if custom_fields:
+                    from ._workflow import validate_field_update
+                    validate_field_update(defn, wi_row["work_item_type"], custom_fields)
 
                 new_state = transition_def["to_state"]
 
@@ -721,13 +728,16 @@ class Substrate:
             timer.log("error")
             raise
 
-    def replay(self) -> ReplayReport:
+    def replay(self, *, continue_on_revoked: bool = False) -> ReplayReport:
         from ._replay import replay as _replay
 
         timer = OpTimer(self._project, "replay")
         try:
             with self._mgr.transaction() as conn:
-                report = _replay(conn, self._mgr.schema, self._project, self._keys)
+                report = _replay(
+                    conn, self._mgr.schema, self._project, self._keys,
+                    continue_on_revoked=continue_on_revoked,
+                )
 
             if report.replayed_drift > 0:
                 self._metrics.inc("replay_drift_count", self._project, amount=report.replayed_drift)
@@ -780,6 +790,99 @@ class Substrate:
                 error_message=r["error_message"],
                 dead_lettered_at=r["dead_lettered_at"],
                 original_hook_queue_id=r.get("original_hook_queue_id"),
+            )
+            for r in rows
+        ]
+
+    def update_not_before(
+        self,
+        work_item_id: uuid.UUID,
+        not_before: datetime | None,
+        actor_id: str,
+        actor_kind: str = "agent",
+        actor_metadata: dict | None = None,
+        *,
+        event_id: uuid.UUID | None = None,
+    ) -> Event:
+        from psycopg.sql import SQL
+
+        from ._events import append_event as _append_event
+        from ._events import lock_work_item as _lock
+
+        timer = OpTimer(self._project, "update_not_before")
+        try:
+            if event_id is None:
+                event_id = uuid.uuid4()
+
+            with self._mgr.transaction() as conn:
+                wi = _lock(conn, work_item_id)
+                if wi is None:
+                    raise SubstrateError(
+                        ErrorCode.WORK_ITEM_NOT_FOUND,
+                        f"Work item {work_item_id} not found",
+                    )
+
+                conn.execute(
+                    SQL("UPDATE work_items_current SET not_before = %s WHERE work_item_id = %s"),
+                    [not_before, work_item_id],
+                )
+
+                evt = _append_event(
+                    conn,
+                    work_item_id=work_item_id,
+                    actor_id=actor_id,
+                    actor_kind=actor_kind,
+                    actor_metadata=actor_metadata,
+                    key_set=self._keys,
+                    workflow_name=wi["workflow_name"],
+                    workflow_version=wi["workflow_version"],
+                    transition="not_before_set",
+                    payload={"not_before": not_before.isoformat() if not_before else None},
+                    event_id=event_id,
+                    _prelocked_wi=wi,
+                )
+
+            self._metrics.inc("events_appended", self._project)
+            timer.log("ok", work_item_id=str(work_item_id))
+            return evt
+        except SubstrateError:
+            timer.log("error")
+            raise
+
+    def register_actor_role(self, actor_id: str, role: str) -> None:
+        from ._actor_roles import register_actor_role as _register
+
+        timer = OpTimer(self._project, "register_actor_role")
+        try:
+            with self._mgr.transaction() as conn:
+                _register(conn, actor_id, role)
+            timer.log("ok", detail=f"{actor_id}:{role}")
+        except SubstrateError:
+            timer.log("error")
+            raise
+
+    def unregister_actor_role(self, actor_id: str, role: str) -> None:
+        from ._actor_roles import unregister_actor_role as _unregister
+
+        timer = OpTimer(self._project, "unregister_actor_role")
+        try:
+            with self._mgr.transaction() as conn:
+                _unregister(conn, actor_id, role)
+            timer.log("ok", detail=f"{actor_id}:{role}")
+        except SubstrateError:
+            timer.log("error")
+            raise
+
+    def list_actor_roles(self, actor_id: str | None = None) -> list[ActorRole]:
+        from ._actor_roles import list_actor_roles as _list
+
+        with self._mgr.transaction() as conn:
+            rows = _list(conn, actor_id=actor_id)
+        return [
+            ActorRole(
+                actor_id=r["actor_id"],
+                role=r["role"],
+                created_at=r["created_at"],
             )
             for r in rows
         ]

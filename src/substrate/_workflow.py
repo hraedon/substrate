@@ -253,6 +253,38 @@ def validate_field_values(
     return result
 
 
+def validate_field_update(
+    wf_def: dict,
+    work_item_type: str,
+    updates: dict,
+) -> None:
+    wits = wf_def.get("work_item_types", [])
+    wit = next((t for t in wits if t["name"] == work_item_type), None)
+    if wit is None:
+        return
+
+    field_defs = {f["name"]: f for f in wit.get("custom_fields", [])}
+
+    for key, value in updates.items():
+        field_def = field_defs.get(key)
+        if field_def is None:
+            raise SubstrateError(
+                ErrorCode.CUSTOM_FIELD_VIOLATION,
+                f"Unknown field {key!r} in custom_fields_update",
+                detail={"field": key},
+            )
+        fd = CustomFieldDef(
+            name=field_def["name"],
+            type=field_def["type"],
+            required=field_def.get("required", False),
+            default_value=field_def.get("default_value"),
+            ui_visible=field_def.get("ui_visible", False),
+            enum_values=field_def.get("enum_values"),
+            target_work_item_type=field_def.get("target_work_item_type"),
+        )
+        _coerce_field(fd, value)
+
+
 def _coerce_field(field_def: CustomFieldDef, value: object) -> object:
     ftype = field_def.type
     if ftype == "string":
