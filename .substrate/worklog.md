@@ -4,6 +4,28 @@ Structured log of development sessions and milestones.
 
 ---
 
+## 2026-05-06 — Session 9: Error-path coverage sweep + Perplexity RFCs
+
+**Focus:** Close error-path coverage gaps identified by unfiled audits; formalize Perplexity feedback as RFCs.
+
+**Context:** Session 8 left 176 tests passing but two unfiled audits existed (`audit-error-paths.md`, `audit-spec-alignment.md`). User asked to write the missing tests and create breadcrumbs for anything not finished. Additionally, Perplexity review raised three concerns: PgBouncer transaction-mode scaling cliff, "no comments" onboarding friction, telemetry-via-hooks lacking a concrete example.
+
+**Delivered:**
+
+1. **New `tests/test_remaining_errors.py`** (10 tests): NOT_BEFORE_FUTURE, WORK_ITEM_TYPE_NOT_DECLARED, WORKFLOW_NOT_REGISTERED, LINK_CROSS_PROJECT, CUSTOM_FIELD_VIOLATION x5, DB_NOT_FOUND.
+2. **Strengthened existing tests** in 6 files: replaced raw string assertions with `ErrorCode` enum assertions for INVALID_TRANSITION, ROLE_NOT_PERMITTED, WORKFLOW_VERSION_CONFLICT, WORKFLOW_VALIDATION_FAILED, WORK_ITEM_TYPE_NOT_DECLARED, CUSTOM_FIELD_VIOLATION, CLAIM_LOST, LINK_TYPE_NOT_ALLOWED, LINK_TARGET_NOT_FOUND, LINK_NOT_FOUND, IDEMPOTENCY_COLLISION_WITH_DIFFERENT_PAYLOAD.
+3. **Cleaned up dead error codes**: removed CLAIM_NOT_EXPIRED, IDEMPOTENCY_COLLISION, DEPRECATED_KEY_ID, LIBRARY_IS_SOLE_SIGNER, HOOK_NOT_DEAD_LETTERED. Wired REPLAY_HALTED into _ReplayHaltError (extends SubstrateError).
+4. **Three RFCs created** in `breadcrumbs/rfc/`: RFC-033 (PgBouncer tx-mode, medium), RFC-034 (no-comments onboarding, low), RFC-035 (telemetry concrete example, low).
+5. **Breadcrumbs reconciled** — moved audit reports to resolved/031, resolved/032; moved 026-030 to resolved/.
+
+**Test Results:** 198 passed in 39.33s (+ 4 slow benchmarks excluded)
+
+**Lint:** clean
+
+**Commits:** dc0902f, bd4c900
+
+---
+
 ## 2026-05-06 — Session 8: Test suite quality sweep — dedup, weak assertions, coverage gaps, _testing centralization
 
 **Focus:** Comprehensive test suite audit and improvement
