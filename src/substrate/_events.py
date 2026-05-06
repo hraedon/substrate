@@ -326,6 +326,7 @@ def read_events_by_work_item(
     work_item_id: uuid.UUID,
     limit: int = 100,
     before_seq: int | None = None,
+    after_seq: int | None = None,
 ) -> list[Event]:
     if before_seq is not None:
         rows = conn.execute(
@@ -336,6 +337,15 @@ def read_events_by_work_item(
             ),
             [work_item_id, before_seq, limit],
         ).fetchall()
+    elif after_seq is not None:
+        rows = conn.execute(
+            SQL(
+                f"SELECT {_EVENT_FIELDS} FROM events "
+                "WHERE work_item_id = %s AND event_seq > %s "
+                "ORDER BY event_seq ASC LIMIT %s"
+            ),
+            [work_item_id, after_seq, limit],
+        ).fetchall()
     else:
         rows = conn.execute(
             SQL(
@@ -345,6 +355,8 @@ def read_events_by_work_item(
             ),
             [work_item_id, limit],
         ).fetchall()
+    if after_seq is not None:
+        return [_row_to_event(r) for r in rows]
     return [_row_to_event(r) for r in reversed(rows)]
 
 

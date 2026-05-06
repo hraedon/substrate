@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from substrate._errors import SubstrateError
+from substrate._errors import ErrorCode, SubstrateError
 from substrate._testing import drop_project_schema, raw_transaction
 
 TESTS_DIR = Path(__file__).parent
@@ -38,7 +38,7 @@ class TestAC07StaleHeartbeat:
 
         with pytest.raises(SubstrateError) as exc_info:
             substrate.heartbeat_claim(wi.work_item_id, "agent-2", ttl_seconds=300)
-        assert exc_info.value.code == "CLAIM_LOST"
+        assert exc_info.value.code == ErrorCode.CLAIM_LOST
 
     def test_heartbeat_rejects_after_auto_steal(self, substrate):
         wi, _ = substrate.create_work_item(
@@ -62,7 +62,7 @@ class TestAC07StaleHeartbeat:
 
         with pytest.raises(SubstrateError) as exc_info:
             substrate.heartbeat_claim(wi.work_item_id, "agent-1", ttl_seconds=300)
-        assert exc_info.value.code == "CLAIM_LOST"
+        assert exc_info.value.code == ErrorCode.CLAIM_LOST
 
     def test_valid_heartbeat_succeeds(self, substrate):
         wi, _ = substrate.create_work_item(

@@ -6,6 +6,7 @@ import psycopg
 import structlog
 from psycopg.sql import SQL, Identifier
 
+from ._errors import ErrorCode, SubstrateError
 from ._keys import KeySet
 from ._signing import verify_event
 from ._types import ReplayReport
@@ -13,8 +14,9 @@ from ._types import ReplayReport
 log = structlog.get_logger()
 
 
-class _ReplayHaltError(Exception):
-    pass
+class _ReplayHaltError(SubstrateError):
+    def __init__(self, message: str) -> None:
+        super().__init__(ErrorCode.REPLAY_HALTED, message)
 
 _EVENT_FIELDS = (
     "event_id, work_item_id, event_seq, actor_id, actor_kind, "

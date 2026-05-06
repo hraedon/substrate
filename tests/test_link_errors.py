@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from substrate._errors import SubstrateError
+from substrate._errors import ErrorCode, SubstrateError
 from substrate._testing import drop_project_schema
 
 TESTS_DIR = Path(__file__).parent
@@ -47,7 +47,7 @@ class TestLinkErrorPaths:
                 link_type="blocks",
                 actor_id="agent-1",
             )
-        assert exc_info.value.code == "LINK_TYPE_NOT_ALLOWED"
+        assert exc_info.value.code == ErrorCode.LINK_TYPE_NOT_ALLOWED
 
     def test_link_target_not_found_rejected(self, substrate):
         wi, _ = substrate.create_work_item(
@@ -64,7 +64,7 @@ class TestLinkErrorPaths:
                 link_type="blocks",
                 actor_id="agent-1",
             )
-        assert exc_info.value.code == "LINK_TARGET_NOT_FOUND"
+        assert exc_info.value.code == ErrorCode.LINK_TARGET_NOT_FOUND
 
     def test_remove_nonexistent_link_rejected(self, substrate):
         wi1, _ = substrate.create_work_item(
@@ -86,7 +86,7 @@ class TestLinkErrorPaths:
                 link_type="fixes",
                 actor_id="agent-1",
             )
-        assert exc_info.value.code == "LINK_NOT_FOUND"
+        assert exc_info.value.code == ErrorCode.LINK_NOT_FOUND
 
     def test_link_removed_event_emitted(self, substrate):
         wi1, _ = substrate.create_work_item(

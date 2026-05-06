@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from substrate._errors import SubstrateError
+from substrate._errors import ErrorCode, SubstrateError
 from substrate._testing import drop_project_schema
 
 TESTS_DIR = Path(__file__).parent
@@ -42,12 +42,14 @@ class TestWorkflow:
         yaml_content = Path(WORKFLOW_PATH).read_text()
         substrate.register_workflow(yaml_content)
         modified = yaml_content.replace("attempt_threshold: 3", "attempt_threshold: 5")
-        with pytest.raises(Exception, match="WORKFLOW_VERSION_CONFLICT"):
+        with pytest.raises(SubstrateError) as exc_info:
             substrate.register_workflow(modified)
+        assert exc_info.value.code == ErrorCode.WORKFLOW_VERSION_CONFLICT
 
     def test_register_invalid_yaml(self, substrate):
-        with pytest.raises(Exception, match="Schema validation"):
+        with pytest.raises(SubstrateError) as exc_info:
             substrate.register_workflow(":::invalid yaml:::")
+        assert exc_info.value.code == ErrorCode.WORKFLOW_VALIDATION_FAILED
 
 
 class TestWorkItem:
@@ -72,7 +74,7 @@ class TestWorkItem:
                 work_item_type="nonexistent",
                 actor_id="agent-1",
             )
-        assert "not declared" in exc_info.value.message
+        assert exc_info.value.code == ErrorCode.WORK_ITEM_TYPE_NOT_DECLARED
 
     def test_create_with_invalid_field(self, substrate):
         with pytest.raises(SubstrateError) as exc_info:
@@ -81,7 +83,7 @@ class TestWorkItem:
                 work_item_type="bug",
                 actor_id="agent-1",
             )
-        assert "Required" in exc_info.value.message
+        assert exc_info.value.code == ErrorCode.CUSTOM_FIELD_VIOLATION
 
 
 class TestTransition:
@@ -119,7 +121,7 @@ class TestTransition:
                 actor_id="agent-1",
                 actor_metadata={"role": "agent"},
             )
-        assert exc_info.value.code == "INVALID_TRANSITION"
+        assert exc_info.value.code == ErrorCode.INVALID_TRANSITION
 
     def test_role_not_permitted(self, substrate):
         wi = self._create_feature(substrate)
@@ -136,7 +138,7 @@ class TestTransition:
                 actor_id="agent-1",
                 actor_metadata={"role": "reviewer"},
             )
-        assert exc_info.value.code == "ROLE_NOT_PERMITTED"
+        assert exc_info.value.code == ErrorCode.ROLE_NOT_PERMITTED
 
     def test_full_lifecycle(self, substrate):
         wi = self._create_feature(substrate)

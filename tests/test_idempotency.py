@@ -42,7 +42,7 @@ class TestAC24IdempotencyMismatch:
             event_id=eid,
         )
 
-        with pytest.raises(Exception, match="IDEMPOTENCY_COLLISION"):
+        with pytest.raises(Exception, match="IDEMPOTENCY_COLLISION_WITH_DIFFERENT_PAYLOAD"):
             substrate.append_event(
                 work_item_id=wi.work_item_id,
                 actor_id="agent-1",
@@ -66,7 +66,7 @@ class TestAC24IdempotencyMismatch:
             event_id=eid,
         )
 
-        with pytest.raises(Exception, match="IDEMPOTENCY_COLLISION"):
+        with pytest.raises(Exception, match="IDEMPOTENCY_COLLISION_WITH_DIFFERENT_PAYLOAD"):
             substrate.append_event(
                 work_item_id=wi.work_item_id,
                 actor_id="agent-2",

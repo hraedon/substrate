@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from substrate._errors import SubstrateError
+from substrate._errors import ErrorCode, SubstrateError
 from substrate._testing import drop_project_schema, raw_transaction
 
 TESTS_DIR = Path(__file__).parent
@@ -184,7 +184,7 @@ class TestTransitionEventIdCollision:
                 transition="custom_event_b",
                 event_id=eid,
             )
-        assert exc_info.value.code == "IDEMPOTENCY_COLLISION_WITH_DIFFERENT_PAYLOAD"
+        assert exc_info.value.code == ErrorCode.IDEMPOTENCY_COLLISION_WITH_DIFFERENT_PAYLOAD
 
 
 class TestClaimStolenMetric:

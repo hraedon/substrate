@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from substrate._errors import SubstrateError
+from substrate._errors import ErrorCode, SubstrateError
 from substrate._testing import drop_project_schema, raw_transaction
 
 TESTS_DIR = Path(__file__).parent
@@ -109,7 +109,7 @@ class TestAC12PinnedVersionIsolation:
                 actor_id="agent-1",
                 actor_metadata={"role": "agent"},
             )
-        assert exc_info.value.code == "INVALID_TRANSITION"
+        assert exc_info.value.code == ErrorCode.INVALID_TRANSITION
         assert "v1" in exc_info.value.message
 
     def test_v2_work_item_accepts_shortcut(self, substrate):

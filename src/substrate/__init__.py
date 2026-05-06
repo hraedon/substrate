@@ -36,6 +36,9 @@ from ._types import (
     ActorKind as ActorKind,
 )
 from ._types import (
+    ActorMetadata as ActorMetadata,
+)
+from ._types import (
     ActorRole,
     Claim,
     DeadLetterEntry,
@@ -715,6 +718,33 @@ class Substrate:
                 return _read_by_transition(conn, transition, limit=limit)
         return []
 
+    def read_events_since(
+        self,
+        work_item_id: uuid.UUID,
+        after_seq: int,
+        *,
+        limit: int = 100,
+    ) -> list[Event]:
+        """Read events for a work item with event_seq strictly greater than
+        the given cursor.
+
+        This is the primitive for hook-miss recovery: a runner persists the
+        highest event_seq it has processed and calls ``read_events_since``
+        on startup to catch up.
+
+        Args:
+            work_item_id: Target work item.
+            after_seq: Return events with ``event_seq > after_seq``.
+            limit: Maximum events to return (default 100).
+
+        Returns:
+            Events in ascending ``event_seq`` order.
+        """
+        from ._events import read_events_by_work_item as _read
+
+        with self._mgr.transaction() as conn:
+            return _read(conn, work_item_id, limit=limit, after_seq=after_seq)
+
     def query_work_items(
         self,
         *,
@@ -1255,3 +1285,21 @@ class Substrate:
         from ._lint import validate_actor_metadata as _validate
 
         return _validate(event, expected_schema)
+
+    @staticmethod
+    def actor_metadata_complete(
+        events: list[Event],
+        expected_keys: list[str],
+    ) -> list[Event]:
+        """Lint helper: return events missing any of the expected actor_metadata keys.
+
+        Args:
+            events: Events to inspect.
+            expected_keys: List of keys that must be present in actor_metadata.
+
+        Returns:
+            List of events with incomplete actor_metadata.
+        """
+        from ._lint import actor_metadata_complete as _complete
+
+        return _complete(events, expected_keys)

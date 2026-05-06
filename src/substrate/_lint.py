@@ -37,3 +37,19 @@ def validate_actor_metadata(
             issues.append(f"schema violation at {path}: {error.message}")
 
     return issues
+
+
+def actor_metadata_complete(
+    events: list[Event],
+    expected_keys: list[str],
+) -> list[Event]:
+    incomplete: list[Event] = []
+    for evt in events:
+        meta = evt.actor_metadata
+        if meta is None:
+            incomplete.append(evt)
+            continue
+        missing = any(k not in meta for k in expected_keys)
+        if missing:
+            incomplete.append(evt)
+    return incomplete

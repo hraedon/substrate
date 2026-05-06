@@ -71,6 +71,106 @@ class TestReplayBenchmark:
         assert report.replayed_drift == 0
         assert report.halted == 0
 
+    @slow
+    def test_replay_long_history(self, substrate):
+        n_items = 100
+        events_per_item = 100
+
+        prev_wi_id = None
+        for i in range(n_items):
+            wi, _ = substrate.create_work_item(
+                workflow_name="test_workflow",
+                work_item_type="feature",
+                actor_id="agent-1",
+                custom_fields={"title": f"Long history item {i}"},
+            )
+            substrate.transition(
+                wi.work_item_id, "start", "agent-1",
+                actor_metadata={"role": "agent"},
+            )
+            substrate.transition(
+                wi.work_item_id, "submit_review", "agent-1",
+                actor_metadata={"role": "agent"},
+            )
+            if i % 2 == 0:
+                substrate.transition(
+                    wi.work_item_id, "approve", "reviewer-1",
+                    actor_metadata={"role": "reviewer"},
+                )
+                used = 4
+            else:
+                substrate.transition(
+                    wi.work_item_id, "reject", "reviewer-1",
+                    actor_metadata={"role": "reviewer"},
+                )
+                substrate.transition(
+                    wi.work_item_id, "submit_review", "agent-1",
+                    actor_metadata={"role": "agent"},
+                )
+                substrate.transition(
+                    wi.work_item_id, "approve", "reviewer-1",
+                    actor_metadata={"role": "reviewer"},
+                )
+                used = 6
+
+            for j in range(events_per_item - used - 1):
+                substrate.append_event(
+                    wi.work_item_id, "agent-1",
+                    transition=f"note_{j}",
+                    payload={"idx": j},
+                )
+
+            if i > 0:
+                substrate.create_link(
+                    from_work_item_id=wi.work_item_id,
+                    to_work_item_id=prev_wi_id,
+                    link_type="blocks",
+                    actor_id="agent-1",
+                )
+            prev_wi_id = wi.work_item_id
+
+        total_events = n_items * events_per_item
+        start = time.time()
+        report = substrate.replay()
+        elapsed = time.time() - start
+
+        print(
+            f"\n  [replay-long] {n_items} items x {events_per_item} events"
+            f" = {total_events} total"
+        )
+        print(f"  [replay-long] wall-clock: {elapsed:.3f}s")
+        print(f"  [replay-long] per-event: {elapsed / total_events * 1000:.3f}ms")
+        print(f"  [replay-long] drift: {report.replayed_drift}, halted: {report.halted}")
+        assert report.replayed_drift == 0
+        assert report.halted == 0
+
+        from psycopg.sql import SQL, Identifier
+
+        with raw_transaction(substrate) as conn:
+            sample = conn.execute(
+                SQL("SELECT work_item_id FROM {} ORDER BY work_item_id LIMIT 5")
+                .format(Identifier(report.table_name))
+            ).fetchall()
+            for row in sample:
+                wi_id = row["work_item_id"]
+                live = conn.execute(
+                    SQL(
+                        "SELECT current_state, custom_fields, needs_review, "
+                        "not_before, last_event_seq "
+                        "FROM work_items_current WHERE work_item_id = %s"
+                    ),
+                    [wi_id],
+                ).fetchone()
+                rep = conn.execute(
+                    SQL(
+                        "SELECT current_state, custom_fields, needs_review, "
+                        "not_before, last_event_seq "
+                        "FROM {} WHERE work_item_id = %s"
+                    ).format(Identifier(report.table_name)),
+                    [wi_id],
+                ).fetchone()
+                assert dict(live) == dict(rep)
+
 
 class TestLinkQueryBenchmark:
     @slow
