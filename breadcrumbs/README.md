@@ -32,6 +32,7 @@ related: ["002", "003"]
 | 033 | Schema-per-project incompatible with PgBouncer transaction mode | medium | proposed |
 | 034 | "No comments in code" style rule creates onboarding cliff | low | proposed |
 | 035 | Telemetry-via-hooks pattern needs a concrete worked example | low | proposed |
+| 036 | External Postgres as a backend — adapter abstraction | medium | proposed |
 
 ## Resolved
 
