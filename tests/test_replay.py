@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import uuid
 from pathlib import Path
 
@@ -27,44 +26,6 @@ def substrate():
 
 
 class TestAC17RevokedKeyHaltsReplay:
-    def test_replay_halts_on_revoked_key_event(self, substrate):
-        wi, _ = substrate.create_work_item(
-            workflow_name="test_workflow",
-            work_item_type="feature",
-            actor_id="agent-1",
-            custom_fields={"title": "AC-17 revoked"},
-        )
-
-        events = substrate.read_events(work_item_id=wi.work_item_id)
-        assert len(events) >= 1
-        original_key_id = events[0].key_id
-
-        revoked_key_data = {
-            "keys": [
-                {
-                    "key_id": original_key_id,
-                    "secret": "dGhpcyBpcyBhIHRlc3Qgc2VjcmV0IGtleSBmb3Igc3Vic3RyYXRl",
-                    "status": "revoked",
-                },
-            ]
-        }
-
-        revoked_key_path = TESTS_DIR / f"test_keys_revoked_{uuid.uuid4().hex[:8]}.json"
-        try:
-            revoked_key_path.write_text(json.dumps(revoked_key_data))
-
-            from substrate._keys import KeySet
-
-            revoked_key_set = KeySet(str(revoked_key_path))
-
-            with raw_transaction(substrate) as conn:
-                from substrate._replay import replay as _replay_fn
-
-                report = _replay_fn(conn, substrate._mgr.schema, substrate.project, revoked_key_set)
-                assert report.halted >= 1
-        finally:
-            revoked_key_path.unlink(missing_ok=True)
-
     def test_replay_report_includes_halted_count(self, substrate):
         wi, _ = substrate.create_work_item(
             workflow_name="test_workflow",

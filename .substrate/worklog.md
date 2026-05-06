@@ -4,6 +4,51 @@ Structured log of development sessions and milestones.
 
 ---
 
+## 2026-05-06 — Session 8: Test suite quality sweep — dedup, weak assertions, coverage gaps, _testing centralization
+
+**Focus:** Comprehensive test suite audit and improvement
+
+**Context:** Session 7 left zero open breadcrumbs with 154 tests passing. User asked to scan the repo with particular attention to the test suite and make appropriate improvements. A thorough audit identified 6 categories of issues: duplicated tests, weak assertions, untested error codes/API paths, `_testing.py` too thin (forcing direct internal imports), overly broad exception matching, and missing coverage.
+
+**Delivered:**
+
+1. **`_testing.py` expanded** — Re-exports `KeySet`, `replay_fn`, `sign_event`, `verify_event`, `Metrics`, `poll_and_process_hooks` with `__all__`. Reduces direct internal imports from 8 test files to ~2 (justified exceptions: `test_jcs.py` unit-tests `_jcs` directly; `test_startup_integrity.py` uses raw psycopg for migration-level tests).
+
+2. **Weak assertions fixed** (5 tests):
+   - `test_smoke.py::test_query_claimable_now` — was tautological (`claimed_by is None or claim_expires_at is not None` → always true). Now asserts `claimed_by is None AND claim_expires_at is None`.
+   - `test_smoke.py::test_create_and_remove_link` — added `link_removed` event payload verification after removal.
+   - `test_smoke.py::test_heartbeat` — now verifies `claim2.expires_at > claim1.expires_at`.
+   - `test_production_readiness.py::test_valid_actor_kinds_accepted` — now verifies `actor_kind` persisted in created event.
+   - `test_stale_heartbeat.py::test_valid_heartbeat_succeeds` — now verifies TTL extension.
+
+3. **JCS exception specificity** — `test_jcs.py` `pytest.raises(Exception)` → `pytest.raises(IntegerDomainError)` for unsafe integer domain tests.
+
+4. **Duplicate tests removed** (3):
+   - `test_replay.py::test_replay_halts_on_revoked_key_event` (identical to test_phase3.py)
+   - `test_key_lifecycle.py::test_replay_halts_on_revoked_key_event` (identical to test_phase3.py)
+   - `test_signing.py::test_replay_detects_out_of_band_state_change` (identical to test_replay.py)
+
+5. **New coverage tests** — `tests/test_coverage_gaps.py` (25 tests) covering previously-untested paths:
+   - `TRANSITION_VIA_APPEND_BLOCKED` (2 tests: reject + allow custom)
+   - `WORK_ITEM_NOT_FOUND` (2 tests: transition + append_event)
+   - `CLAIM_NOT_FOUND` (2 tests: heartbeat + release on unclaimed)
+   - `sweep_expired_claims` (3 tests: sweep + events + zero case)
+   - `WORKFLOW_SEMANTIC_ERROR` (3 tests: no initial, unreachable, undeclared role)
+   - `expected_attempt_number` (2 tests: reject stale + accept correct)
+   - `read_events` filters (7 tests: by actor, transition, time range, empty, validation)
+   - `query_work_items` filters (3 tests: needs_review, workflow_version, work_item_types)
+   - `hmac_key_path=None` (1 test: rejects with UNKNOWN_KEY_ID)
+
+6. **Direct internal imports cleaned up** — test_key_lifecycle.py, test_phase3.py, test_signing.py, test_scale.py now import from `_testing` instead of reaching into `_keys`, `_replay`, `_signing`, `_hooks`, `_observability` directly.
+
+**Breadcrumbs resolved:** None filed; BC-026 partially addressed (test coverage added for several codes, but cleanup decision still pending).
+
+**Test Results:** 176 passed in 40.8s (+ 3 slow benchmarks excluded)
+
+**Lint:** clean
+
+---
+
 ## 2026-05-06 — Session 7: Production readiness — migration packaging, metrics, validation, docstrings, spec sync, replay errors, test coverage
 
 **Focus:** Production readiness sweep addressing 7 items from comprehensive codebase audit

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from substrate._testing import drop_project_schema
+from substrate._testing import Metrics, drop_project_schema, poll_and_process_hooks, raw_transaction
 
 TESTS_DIR = Path(__file__).parent
 DSN = "postgresql://substrate_test:substrate_test@localhost:5432/substrate_test"
@@ -140,8 +140,6 @@ class TestHookThroughputBenchmark:
         events = substrate.read_events(work_item_id=wi.work_item_id)
         event_id = events[0].event_id
 
-        from substrate._testing import raw_transaction
-
         with raw_transaction(substrate) as conn:
             for i in range(n_hooks):
                 conn.execute(
@@ -166,9 +164,6 @@ class TestHookThroughputBenchmark:
         start = time.time()
         while True:
             with raw_transaction(substrate) as conn:
-                from substrate._hooks import poll_and_process_hooks
-                from substrate._observability import Metrics
-
                 batch = poll_and_process_hooks(
                     conn, handlers, substrate._keys,
                     Metrics(), substrate.project,

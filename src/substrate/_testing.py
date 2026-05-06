@@ -5,6 +5,24 @@ from contextlib import contextmanager
 
 import psycopg
 
+from ._hooks import poll_and_process_hooks as poll_and_process_hooks
+from ._keys import KeySet as KeySet
+from ._observability import Metrics as Metrics
+from ._replay import replay as replay_fn
+from ._signing import sign_event as sign_event
+from ._signing import verify_event as verify_event
+
+__all__ = [
+    "KeySet",
+    "Metrics",
+    "drop_project_schema",
+    "poll_and_process_hooks",
+    "raw_transaction",
+    "replay_fn",
+    "sign_event",
+    "verify_event",
+]
+
 
 @contextmanager
 def raw_transaction(substrate) -> Generator[psycopg.Connection, None, None]:

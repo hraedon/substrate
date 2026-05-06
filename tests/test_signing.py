@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from substrate._testing import drop_project_schema, raw_transaction
+from substrate._testing import KeySet, drop_project_schema, raw_transaction, verify_event
 
 TESTS_DIR = Path(__file__).parent
 DSN = "postgresql://substrate_test:substrate_test@localhost:5432/substrate_test"
@@ -99,9 +99,6 @@ class TestAC26JsonbDriftSurvival:
         events = substrate.read_events(work_item_id=wi.work_item_id)
         evt = events[0]
 
-        from substrate._keys import KeySet
-        from substrate._signing import verify_event
-
         key_set = KeySet(KEY_PATH)
         key_entry = key_set.active_key()
 
@@ -116,21 +113,3 @@ class TestAC26JsonbDriftSurvival:
             key=key_entry.secret,
             stored_envelope=evt.canonical_envelope,
         )
-
-    def test_replay_detects_out_of_band_state_change(self, substrate):
-        wi, _ = substrate.create_work_item(
-            workflow_name="test_workflow",
-            work_item_type="feature",
-            actor_id="agent-1",
-            custom_fields={"title": "AC-29 drift"},
-        )
-
-        with raw_transaction(substrate) as conn:
-            conn.execute(
-                "UPDATE work_items_current SET current_state = 'done' "
-                "WHERE work_item_id = %s",
-                [wi.work_item_id],
-            )
-
-        report = substrate.replay()
-        assert report.replayed_drift >= 1

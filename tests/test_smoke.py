@@ -209,9 +209,9 @@ class TestClaims:
             custom_fields={"title": "Heartbeat"},
         )
 
-        substrate.acquire_claim(wi.work_item_id, "agent-1", ttl_seconds=60)
-        claim = substrate.heartbeat_claim(wi.work_item_id, "agent-1", ttl_seconds=300)
-        assert claim.expires_at is not None
+        claim1 = substrate.acquire_claim(wi.work_item_id, "agent-1", ttl_seconds=60)
+        claim2 = substrate.heartbeat_claim(wi.work_item_id, "agent-1", ttl_seconds=300)
+        assert claim2.expires_at > claim1.expires_at
 
 
 class TestQuery:
@@ -240,7 +240,8 @@ class TestQuery:
             claimable_now=True,
         )
         for wi in page.items:
-            assert wi.claimed_by is None or wi.claim_expires_at is not None
+            assert wi.claimed_by is None
+            assert wi.claim_expires_at is None
 
     def test_pagination_stable_no_duplicates(self, substrate):
         for i in range(5):
@@ -298,6 +299,15 @@ class TestLinks:
             link_type="fixes",
             actor_id="agent-1",
         )
+
+        events = substrate.read_events(work_item_id=wi1.work_item_id)
+        link_removed = [
+            e for e in events
+            if e.transition == "link_removed"
+            and (e.payload or {}).get("link_type") == "fixes"
+            and (e.payload or {}).get("to_work_item_id") == str(wi2.work_item_id)
+        ]
+        assert len(link_removed) == 1
 
     def test_create_link_with_payload(self, substrate):
         wi1, _ = substrate.create_work_item(

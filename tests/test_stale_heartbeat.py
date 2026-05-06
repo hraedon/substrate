@@ -71,6 +71,7 @@ class TestAC07StaleHeartbeat:
             actor_id="agent-1",
             custom_fields={"title": "Valid heartbeat"},
         )
-        substrate.acquire_claim(wi.work_item_id, "agent-1", ttl_seconds=60)
-        claim = substrate.heartbeat_claim(wi.work_item_id, "agent-1", ttl_seconds=300)
-        assert claim.actor_id == "agent-1"
+        claim1 = substrate.acquire_claim(wi.work_item_id, "agent-1", ttl_seconds=60)
+        claim2 = substrate.heartbeat_claim(wi.work_item_id, "agent-1", ttl_seconds=300)
+        assert claim2.actor_id == "agent-1"
+        assert claim2.expires_at > claim1.expires_at

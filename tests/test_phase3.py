@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from substrate._testing import drop_project_schema, raw_transaction
+from substrate._testing import KeySet, drop_project_schema, raw_transaction, replay_fn
 
 TESTS_DIR = Path(__file__).parent
 DSN = "postgresql://substrate_test:substrate_test@localhost:5432/substrate_test"
@@ -158,14 +158,11 @@ class TestContinueOnRevokedReplay:
         revoked_key_path = TESTS_DIR / f"test_keys_cor_{uuid.uuid4().hex[:8]}.json"
         try:
             revoked_key_path.write_text(json.dumps(revoked_key_data))
-            from substrate._keys import KeySet
 
             revoked_key_set = KeySet(str(revoked_key_path))
 
             with raw_transaction(substrate) as conn:
-                from substrate._replay import replay as _replay_fn
-
-                report = _replay_fn(
+                report = replay_fn(
                     conn, substrate._mgr.schema, substrate.project, revoked_key_set,
                     continue_on_revoked=False,
                 )
@@ -197,14 +194,11 @@ class TestContinueOnRevokedReplay:
         revoked_key_path = TESTS_DIR / f"test_keys_cor2_{uuid.uuid4().hex[:8]}.json"
         try:
             revoked_key_path.write_text(json.dumps(revoked_key_data))
-            from substrate._keys import KeySet
 
             revoked_key_set = KeySet(str(revoked_key_path))
 
             with raw_transaction(substrate) as conn:
-                from substrate._replay import replay as _replay_fn
-
-                report = _replay_fn(
+                report = replay_fn(
                     conn, substrate._mgr.schema, substrate.project, revoked_key_set,
                     continue_on_revoked=True,
                 )

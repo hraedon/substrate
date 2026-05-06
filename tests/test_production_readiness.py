@@ -124,7 +124,7 @@ class TestActorKindValidation:
         assert "actor_kind" in exc_info.value.message
 
     def test_invalid_actor_kind_on_update_not_before(self, substrate):
-        from datetime import datetime, timedelta, timezone
+        from datetime import UTC, datetime, timedelta
 
         wi, _ = substrate.create_work_item(
             workflow_name="test_workflow",
@@ -135,7 +135,7 @@ class TestActorKindValidation:
         with pytest.raises(SubstrateError) as exc_info:
             substrate.update_not_before(
                 work_item_id=wi.work_item_id,
-                not_before=datetime.now(timezone.utc) + timedelta(hours=1),
+                not_before=datetime.now(UTC) + timedelta(hours=1),
                 actor_id="agent-1",
                 actor_kind="robot",
             )
@@ -151,6 +151,11 @@ class TestActorKindValidation:
                 custom_fields={"title": f"kind {kind}"},
             )
             assert wi is not None
+
+            events = substrate.read_events(work_item_id=wi.work_item_id)
+            created_events = [e for e in events if e.transition == "created"]
+            assert len(created_events) >= 1
+            assert created_events[0].actor_kind == kind
 
 
 class TestTransitionEventIdCollision:
@@ -184,8 +189,6 @@ class TestTransitionEventIdCollision:
 
 class TestClaimStolenMetric:
     def test_stolen_claim_emits_event_and_metric(self, substrate):
-        from datetime import UTC, datetime, timedelta
-
         wi, _ = substrate.create_work_item(
             workflow_name="test_workflow",
             work_item_type="feature",

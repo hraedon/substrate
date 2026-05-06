@@ -7,8 +7,14 @@ from pathlib import Path
 import pytest
 
 from substrate._errors import ErrorCode, SubstrateError
-from substrate._keys import KeySet
-from substrate._testing import drop_project_schema, raw_transaction
+from substrate._testing import (
+    KeySet,
+    drop_project_schema,
+    raw_transaction,
+    replay_fn,
+    sign_event,
+    verify_event,
+)
 
 TESTS_DIR = Path(__file__).parent
 DSN = "postgresql://substrate_test:substrate_test@localhost:5432/substrate_test"
@@ -91,35 +97,6 @@ class TestRevokedKeyId:
             ks.verify_key_status("rev-1")
         assert exc_info.value.code == ErrorCode.REVOKED_KEY_ID
 
-    def test_replay_halts_on_revoked_key_event(self, substrate):
-        wi, _ = substrate.create_work_item(
-            workflow_name="test_workflow",
-            work_item_type="feature",
-            actor_id="agent-1",
-            custom_fields={"title": "AC-16 revoke replay"},
-        )
-        events = substrate.read_events(work_item_id=wi.work_item_id)
-        key_id = events[0].key_id
-
-        revoked_path = TESTS_DIR / f"_ac16_rev_{uuid.uuid4().hex[:8]}.json"
-        try:
-            _write_key_file(revoked_path, [
-                {"key_id": key_id, "secret": SECRET, "status": "revoked"},
-            ])
-            revoked_ks = KeySet(str(revoked_path))
-
-            with raw_transaction(substrate) as conn:
-                from substrate._replay import replay as _replay_fn
-
-                report = _replay_fn(
-                    conn, substrate._mgr.schema, substrate.project,
-                    revoked_ks, continue_on_revoked=False,
-                )
-            assert report.halted >= 1
-        finally:
-            revoked_path.unlink(missing_ok=True)
-
-
 class TestDeprecatedKeyId:
     def test_verify_key_status_accepts_deprecated(self, tmp_path):
         kf = _write_key_file(tmp_path / "keys.json", [
@@ -157,8 +134,6 @@ class TestDeprecatedKeyId:
         ks = KeySet(str(kf))
         entry = ks.verify_key_status("dep-1")
 
-        from substrate._signing import sign_event, verify_event
-
         eid = uuid.uuid4()
         wid = uuid.uuid4()
         sig, chash, envelope = sign_event(
@@ -190,9 +165,7 @@ class TestDeprecatedKeyId:
             dep_ks = KeySet(str(dep_path))
 
             with raw_transaction(substrate) as conn:
-                from substrate._replay import replay as _replay_fn
-
-                report = _replay_fn(
+                report = replay_fn(
                     conn, substrate._mgr.schema, substrate.project,
                     dep_ks, continue_on_revoked=True,
                 )
