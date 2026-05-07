@@ -348,9 +348,9 @@ def sweep_expired_claims(conn: psycopg.Connection, key_set) -> int:
         conn.execute(
             SQL(
                 "UPDATE work_items_current SET claimed_by = NULL, claim_expires_at = NULL "
-                "WHERE work_item_id = %s AND claimed_by IS NOT NULL"
+                "WHERE work_item_id = %s AND claimed_by = %s"
             ),
-            [wi_id],
+            [wi_id, prior_actor_id],
         )
 
         if wi is not None:

@@ -10,6 +10,7 @@ from ._integrity import SUBSTRATE_VERSION
 from ._types import (
     ActorRole,
     Claim,
+    ConnectionInfo,
     DeadLetterEntry,
     Event,
     HookContext,
@@ -136,6 +137,10 @@ class InMemorySubstrate:
     def prometheus_registry(self):
         return None
 
+    @property
+    def connection_info(self) -> ConnectionInfo:
+        return ConnectionInfo(host=None, port=None, database=None, project=self._project)
+
     def register_validator(self, name: str, handler: Callable) -> None:
         self._validators[name] = handler
 
@@ -175,13 +180,25 @@ class InMemorySubstrate:
                         "id": entry["id"],
                         "event_id": entry["event_id"],
                         "hook_name": entry["hook_name"],
-                        "hook_type": entry.get("hook_type", "transition"),
+                        "hook_type": entry.get("hook_type", "async"),
                         "payload": entry.get("payload"),
                         "retry_count": entry["retry_count"],
                         "error_message": "handler failed",
                         "dead_lettered_at": datetime.now(UTC),
                         "original_hook_queue_id": entry["id"],
                     }
+                    work_item_id = entry.get("work_item_id")
+                    if work_item_id:
+                        wi = self._work_items.get(work_item_id)
+                        if wi is not None:
+                            self._append_claim_event(
+                                wi, uuid.uuid4(), "hook_dead_lettered",
+                                {
+                                    "hook_name": entry["hook_name"],
+                                    "hook_queue_id": entry["id"],
+                                    "error_message": "handler failed",
+                                },
+                            )
                 else:
                     self._hook_queue.append(entry)
         return processed
@@ -517,7 +534,7 @@ class InMemorySubstrate:
                     "event_id": event_id,
                     "work_item_id": work_item_id,
                     "hook_name": hn,
-                    "hook_type": "transition",
+                    "hook_type": "async",
                     "transition": transition_name,
                     "payload": payload,
                     "retry_count": 0,
@@ -548,28 +565,30 @@ class InMemorySubstrate:
 
         if work_item_id is not None:
             evts = list(self._events.get(work_item_id, []))
-            if before_seq is not None:
-                evts = [e for e in evts if e.event_seq < before_seq]
-                evts.sort(key=lambda e: e.event_seq, reverse=True)
-                return evts[:limit]
-            evts.sort(key=lambda e: e.event_seq)
-            return evts[:limit]
+        else:
+            evts = [e for el in self._events.values() for e in el]
+
+        if before_seq is not None:
+            evts = [e for e in evts if e.event_seq < before_seq]
+            evts.sort(key=lambda e: e.event_seq, reverse=True)
+            evts = list(reversed(evts[:limit]))
+            return evts
+
         if actor_id is not None:
-            evts = [e for el in self._events.values() for e in el]
             evts = [e for e in evts if e.actor_id == actor_id]
-            evts.sort(key=lambda e: (e.timestamp, e.event_seq), reverse=True)
-            return evts[:limit]
-        if start is not None and end is not None:
-            evts = [e for el in self._events.values() for e in el]
-            evts = [e for e in evts if start <= e.timestamp <= end]
-            evts.sort(key=lambda e: e.timestamp)
-            return evts[:limit]
         if transition is not None:
-            evts = [e for el in self._events.values() for e in el]
             evts = [e for e in evts if e.transition == transition]
+        if start is not None and end is not None:
+            evts = [e for e in evts if start <= e.timestamp <= end]
+
+        if work_item_id is not None:
+            evts.sort(key=lambda e: e.event_seq)
+        elif start is not None:
+            evts.sort(key=lambda e: e.timestamp)
+        else:
             evts.sort(key=lambda e: (e.timestamp, e.event_seq), reverse=True)
-            return evts[:limit]
-        return []
+
+        return evts[:limit]
 
     def read_events_since(
         self,
@@ -1236,24 +1255,25 @@ class InMemorySubstrate:
                 f"Actor {actor_id!r} is not authorized for role {role!r}",
             )
 
-    def _check_escalation(self, wi: dict, attempt_number: int) -> None:
+    def _check_escalation(self, wi: dict, attempt_number: int) -> bool:
         wf_data = self._workflows.get((wi["workflow_name"], wi["workflow_version"]))
         if wf_data is None:
-            return
+            return False
         threshold = wf_data.get("attempt_threshold")
         if threshold is None or attempt_number < threshold:
-            return
+            return False
         existing = any(
             e.transition == "escalated"
             for e in self._events.get(wi["work_item_id"], [])
         )
         if existing:
-            return
+            return False
         wi["needs_review"] = True
         self._append_claim_event(
             wi, uuid.uuid4(), "escalated",
             {"attempt_number": attempt_number, "threshold": threshold},
         )
+        return True
 
     def _append_claim_event(
         self, wi: dict, event_id: uuid.UUID, transition: str, payload: dict,

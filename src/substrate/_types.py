@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
@@ -234,6 +235,31 @@ class Claim:
 
 
 @dataclass(frozen=True)
+class ConnectionInfo:
+    host: str | None
+    port: int | None
+    database: str | None
+    project: str
+
+    def to_dict(self) -> dict:
+        return {
+            "host": self.host,
+            "port": self.port,
+            "database": self.database,
+            "project": self.project,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> ConnectionInfo:
+        return cls(
+            host=data.get("host"),
+            port=data.get("port"),
+            database=data.get("database"),
+            project=data["project"],
+        )
+
+
+@dataclass(frozen=True)
 class CustomFieldDef:
     name: str
     type: str
@@ -459,6 +485,15 @@ class QueryPage(Generic[T]):
             "has_more": self.has_more,
         }
 
+    @classmethod
+    def from_dict(cls, data: dict, item_from_dict: Callable[[dict], T]) -> QueryPage[T]:
+        items = [item_from_dict(item) for item in data["items"]]
+        return cls(
+            items=items,
+            cursor=uuid.UUID(data["cursor"]) if data.get("cursor") else None,
+            has_more=data["has_more"],
+        )
+
 
 @dataclass(frozen=True)
 class ReplayReport:
@@ -541,6 +576,22 @@ class ValidatorContext:
             "actor_metadata": self.actor_metadata,
         }
 
+    @classmethod
+    def from_dict(cls, data: dict) -> ValidatorContext:
+        return cls(
+            work_item_id=uuid.UUID(data["work_item_id"]),
+            workflow_name=data["workflow_name"],
+            workflow_version=data["workflow_version"],
+            work_item_type=data["work_item_type"],
+            current_state=data["current_state"],
+            new_state=data["new_state"],
+            transition_name=data["transition_name"],
+            payload=data.get("payload"),
+            custom_fields=data["custom_fields"],
+            actor_id=data["actor_id"],
+            actor_metadata=data.get("actor_metadata"),
+        )
+
 
 @dataclass(frozen=True)
 class HookContext:
@@ -560,6 +611,17 @@ class HookContext:
             "transition": self.transition,
             "payload": self.payload,
         }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> HookContext:
+        return cls(
+            hook_queue_id=data["hook_queue_id"],
+            event_id=uuid.UUID(data["event_id"]),
+            work_item_id=uuid.UUID(data["work_item_id"]),
+            hook_name=data["hook_name"],
+            transition=data.get("transition"),
+            payload=data.get("payload"),
+        )
 
 
 @dataclass(frozen=True)

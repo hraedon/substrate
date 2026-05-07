@@ -29,7 +29,7 @@ related: ["002", "003"]
 
 | # | Title | Severity | Status |
 |---|---|---|---|
-| 042 | Expose Substrate DSN (or equivalent) as public API | medium | proposed |
+| 042 | Expose Substrate DSN (or equivalent) as public API | medium | implemented |
 
 ## Resolved
 

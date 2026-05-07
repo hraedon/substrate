@@ -51,6 +51,9 @@ from ._types import (
     WorkItem,
 )
 from ._types import (
+    ConnectionInfo as ConnectionInfo,
+)
+from ._types import (
     ReplayReportEntry as ReplayReportEntry,
 )
 from ._types import (
@@ -180,6 +183,23 @@ class Substrate:
     @property
     def project(self) -> str:
         return self._project
+
+    @property
+    def connection_info(self) -> ConnectionInfo:
+        """Connection details (no credentials) for downstream test infrastructure.
+
+        Returns:
+            ``ConnectionInfo`` with host, port, database, and project.
+        """
+        from urllib.parse import urlparse
+
+        parsed = urlparse(self._mgr.dsn)
+        return ConnectionInfo(
+            host=parsed.hostname,
+            port=parsed.port,
+            database=parsed.path.lstrip("/") if parsed.path else None,
+            project=self._project,
+        )
 
     @property
     def substrate_version(self) -> str:

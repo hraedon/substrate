@@ -4,6 +4,44 @@ Structured log of development sessions and milestones.
 
 ---
 
+## 2026-05-07 — Session 13: Remaining session-12 items, fresh scan fixes, BC-042 implementation
+
+**Focus:** Pick up session 12's remaining items; fresh scan for additional issues; fix all MEDIUM-severity bugs found.
+
+**Context:** Session 12's reflection listed remaining work: BC-042 (DSN public API), hooks reconnect log, missing from_dict methods, unspecified MEDIUM issues. Did a fresh scan of all source files, identified 8 new MEDIUM + 10 LOW issues.
+
+**Delivered:**
+
+1. **BC-042: Exposed `connection_info` as public API** — Added `ConnectionInfo` frozen dataclass to `_types.py` with `host`, `port`, `database`, `project` fields. Added `connection_info` property on `Substrate` (parses DSN via `urlparse`, strips credentials). Exported via `__init__.py`. Status promoted to implemented.
+
+2. **Fixed `_hooks.py` reconnect log always showing `attempt=0`** — `reconnect_attempts` was reset to 0 before the log line. Now captures `successful_attempt` before resetting.
+
+3. **Added missing `from_dict` methods** — `ValidatorContext.from_dict`, `HookContext.from_dict`, `QueryPage.from_dict` (takes `item_from_dict` factory for generic deserialization).
+
+4. **M-1 (real backend): Fixed `sweep_expired_claims` race condition** — `UPDATE work_items_current SET claimed_by = NULL` could clobber a newly-acquired claim between the DELETE and the FOR UPDATE lock. Changed WHERE clause to `AND claimed_by = %s` (matching expired `prior_actor_id`), so a re-claimed row is not overwritten.
+
+5. **M-2: Fixed InMemorySubstrate `read_events` `before_seq` ordering** — Was returning DESC order; real backend reverses to ASC. Added `list(reversed(...))` to match.
+
+6. **M-3: Added `connection_info` to InMemorySubstrate** — Returns `ConnectionInfo(host=None, port=None, database=None, project=...)`.
+
+7. **M-4: InMemorySubstrate `poll_hooks` now emits `hook_dead_lettered` events** — Dead-lettered hooks now produce audit events in the event log, matching the real backend's `_move_to_dead_letter`.
+
+8. **M-6: Fixed SQL f-string in `append_transition_event`** — Replaced f-string interpolation of `claim_clear` with psycopg `SQL` composition (`+ claim_clear + SQL(" WHERE ...")`).
+
+9. **M-7: InMemorySubstrate `_check_escalation` now returns `bool`** — Was `-> None` (implicit), diverged from real backend's `-> bool`.
+
+10. **M-8: InMemorySubstrate hook queue `hook_type` fixed** — Changed from `"transition"` to `"async"` matching real backend.
+
+11. **L-6: `SubstrateError.code` type tightened** — Changed from `str` to `ErrorCode` for type-safety.
+
+**Breadcrumbs resolved:** BC-042 (implemented).
+
+**Test Results:** 270 passed in 118.40s
+
+**Lint:** clean
+
+---
+
 ## 2026-05-07 — Session 12: Validation scan — fix HIGH/MEDIUM issues, add test coverage, promote breadcrumbs
 
 **Focus:** Comprehensive validation of repo state; fix all HIGH-severity issues found; fill test coverage gaps; promote breadcrumbs.

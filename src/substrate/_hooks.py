@@ -376,8 +376,9 @@ class HookConsumer:
                     time.sleep(backoff)
                     try:
                         conn = self._connect()
+                        successful_attempt = reconnect_attempts
                         reconnect_attempts = 0
-                        log.info("hooks.reconnected", attempt=reconnect_attempts)
+                        log.info("hooks.reconnected", attempt=successful_attempt)
                     except Exception as ce:
                         log.error("hooks.reconnect_failed", error=str(ce))
                     continue

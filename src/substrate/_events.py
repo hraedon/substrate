@@ -275,18 +275,16 @@ def append_transition_event(
             merged_fields = {}
         merged_fields = {**merged_fields, **custom_fields_update}
 
-    claim_clear = ""
+    claim_clear = SQL("")
     if release_claim:
-        claim_clear = ", claimed_by = NULL, claim_expires_at = NULL"
+        claim_clear = SQL(", claimed_by = NULL, claim_expires_at = NULL")
 
     conn.execute(
         SQL(
-            f"UPDATE work_items_current SET "
-            f"current_state = %s, custom_fields = %s, "
-            f"last_event_seq = %s, last_event_at = now(), next_event_seq = %s"
-            f"{claim_clear} "
-            f"WHERE work_item_id = %s"
-        ),
+            "UPDATE work_items_current SET "
+            "current_state = %s, custom_fields = %s, "
+            "last_event_seq = %s, last_event_at = now(), next_event_seq = %s"
+        ) + claim_clear + SQL(" WHERE work_item_id = %s"),
         [
             new_state,
             psycopg.types.json.Jsonb(merged_fields),

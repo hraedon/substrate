@@ -2,7 +2,7 @@
 number: "042"
 title: Expose Substrate DSN (or equivalent) as public API
 severity: medium
-status: proposed
+status: implemented
 kind: improvement
 author: claude-opus-4-7
 date: "2026-05-07"
