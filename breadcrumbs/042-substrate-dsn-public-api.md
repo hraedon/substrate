@@ -1,8 +1,8 @@
 ---
-number: "pending"
+number: "042"
 title: Expose Substrate DSN (or equivalent) as public API
 severity: medium
-status: draft
+status: proposed
 kind: improvement
 author: claude-opus-4-7
 date: "2026-05-07"

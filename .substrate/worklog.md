@@ -4,6 +4,40 @@ Structured log of development sessions and milestones.
 
 ---
 
+## 2026-05-07 — Session 12: Validation scan — fix HIGH/MEDIUM issues, add test coverage, promote breadcrumbs
+
+**Focus:** Comprehensive validation of repo state; fix all HIGH-severity issues found; fill test coverage gaps; promote breadcrumbs.
+
+**Context:** User asked for full repo analysis, verification of recent changes, and recommended next steps. Analysis identified 3 HIGH, 8 MEDIUM, and 10 LOW issues plus spec AC coverage gaps.
+
+**Delivered:**
+
+1. **H-1: Fixed `_claims.py:30` return type annotation** — `acquire_claim` returns `tuple[Claim, bool, bool]` but was annotated `tuple[Claim, bool]`. Breaks type checkers.
+
+2. **H-2: Fixed `_in_memory.py` `poll_hooks` passing raw dict instead of `HookContext`** — Handlers now receive a proper `HookContext` dataclass matching the real `poll_and_process_hooks` behavior. Tests that validate handler behavior against `HookContext` attributes will now be faithful.
+
+3. **H-3 + M-8: Fixed InMemorySubstrate `read_events` filter semantics + transition key divergence** — InMemorySubstrate now stores `wf.to_dict()` instead of raw YAML dict, eliminating the `from`/`to` vs `from_state`/`to_state` key divergence in transitions (3 locations: transition lookup, state assignment, replay). `read_events` now uses priority-based matching (work_item_id > actor_id > start/end > transition) matching the real Substrate, instead of compositing all filters.
+
+4. **M-5: Fixed `ActorKind` case mismatch** — `ActorKind.AGENT` was `"AGENT"` (uppercase) but validation checks `"agent"` (lowercase). Fixed enum values to lowercase.
+
+5. **M-1: Fixed `register_actor_role` docstring** — Was describing `unregister_actor_role`'s error. Removed the incorrect `Raises` block.
+
+6. **L-6: Fixed `requeue_dead_lettered_hook` losing `work_item_id`** — Requeued entry now preserves `work_item_id` and `transition` from the original payload, matching the real backend.
+
+7. **New test file: `tests/test_hook_consumer.py`** (4 tests) — Smoke tests for `start_hook_consumer`/`stop_hook_consumer` lifecycle (AC-14), idempotent start/stop, and poll-based hook delivery with `HookContext` verification.
+
+8. **New test file: `tests/test_claim_link_idempotency.py`** (4 tests) — Event_id dedup verification for `acquire_claim`, `release_claim`, `create_link`, `remove_link` (AC-24).
+
+**Breadcrumbs resolved:** BC-040 (read_events filter semantics), BC-041 (conformance coverage gaps).
+
+**Breadcrumbs promoted:** BC-042 (DSN public API, proposed).
+
+**Test Results:** 270 passed in 111.42s
+
+**Lint:** clean
+
+---
+
 ## 2026-05-07 — Session 11: Validation scan — InMemorySubstrate bug fixes, BC-036 resolution, error-code cleanup
 
 **Focus:** Deep validation scan of the repo after Deepseek's session 10 work; fix all bugs found; close remaining breadcrumbs.

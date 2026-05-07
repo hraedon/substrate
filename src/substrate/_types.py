@@ -10,9 +10,9 @@ T = TypeVar("T")
 
 
 class ActorKind(Enum):
-    AGENT = "AGENT"
-    HUMAN = "HUMAN"
-    SYSTEM = "SYSTEM"
+    AGENT = "agent"
+    HUMAN = "human"
+    SYSTEM = "system"
 
 
 @dataclass(frozen=True)

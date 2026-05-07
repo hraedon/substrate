@@ -27,7 +27,7 @@ def acquire_claim(
     ttl_seconds: int,
     key_set,
     event_id: uuid.UUID | None = None,
-) -> tuple[Claim, bool]:
+) -> tuple[Claim, bool, bool]:
     from ._events import append_event, lock_work_item
 
     wi = lock_work_item(conn, work_item_id)

@@ -29,16 +29,31 @@ related: ["002", "003"]
 
 | # | Title | Severity | Status |
 |---|---|---|---|
-| *(none)* | | | |
+| 042 | Expose Substrate DSN (or equivalent) as public API | medium | proposed |
 
 ## Resolved
 
 | # | Title | Severity | Resolution |
 |---|---|---|---|
+| 040 | InMemorySubstrate read_events composited filters; real Substrate is mutually exclusive | medium | [resolved/040](resolved/040-in-memory-read-events-filter-semantics.md) |
+| 041 | Conformance tests missing coverage for claim event actor_id, dead-letter, replay drift, hook consumer | medium | [resolved/041](resolved/041-conformance-coverage-gaps.md) |
 | 038 | Ship first-class test fixtures / in-memory backend for downstream consumers | high | [resolved/038](resolved/038-in-memory-test-fixtures.md) |
 | 037 | work_item_ref fields accept any UUID — no existence or type enforcement at runtime | high | [resolved/037](resolved/037-work-item-ref-no-runtime-validation.md) |
 | 036 | External Postgres deployment guide | n/a | [resolved/036](resolved/036-external-postgres-deployment.md) |
 | 039 | register_actor_role should be idempotent by default | low | Duplicate registration now no-op in both backends; SF2 try/except wrappers removed |
+| 032 | Spec-to-Code-to-Test Alignment Audit | n/a | [resolved/032](resolved/032-spec-alignment-audit.md) |
+| 031 | Error-Path Coverage Sweep | n/a | [resolved/031](resolved/031-error-path-coverage-sweep.md) |
+| 030 | Replay drift assertion on long histories | low | [resolved/030](resolved/030-replay-drift-long-history.md) |
+| 029 | Hook-miss recovery: documented event-since-cursor primitive | medium | [resolved/029](resolved/029-hook-miss-recovery-cursor.md) |
+| 028 | Document and type the actor_metadata contract | medium | [resolved/028](resolved/028-actor-metadata-contract.md) |
+| 027 | Round-trip SF2 workflow YAMLs through register_workflow | high | [resolved/027](resolved/027-sf2-workflow-yaml-roundtrip.md) |
+| 026 | Dead error codes: defined but never raised | low | [resolved/026](resolved/026-dead-error-codes.md) |
+| 015 | Replay matches transitions by name only, not (name, from_state) | medium | [resolved/015](resolved/015-replay-name-only-match.md) |
+| 014 | remove_link does not validate that the link exists | low | [resolved/014](resolved/014-remove-link-no-existence-check.md) |
+| 013 | has_link_type filter does not account for link_removed events | medium | [resolved/013](resolved/013-has-link-type-ignores-removal.md) |
+| 012 | Event.timestamp returned to caller differs from server-side stored value | low | [resolved/012](resolved/012-event-timestamp-mismatch.md) |
+| 011 | Event dataclass missing workflow_name field | low | [resolved/011](resolved/011-event-missing-workflow-name.md) |
+| 010 | append_event allows arbitrary transition strings, bypassing FR-11/FR-12 | high | [resolved/010](resolved/010-append-event-bypasses-validation.md) |
 | 001 | Replay does not verify signatures or check key status | high | [resolved/001](resolved/001-replay-no-signature-verification.md) |
 | 002 | Replay output table contains live snapshot, not derived state | medium | [resolved/002](resolved/002-replay-table-live-snapshot.md) |
 | 003 | Drift detection compares only current_state and last_event_seq | high | [resolved/003](resolved/003-drift-detection-incomplete.md) |

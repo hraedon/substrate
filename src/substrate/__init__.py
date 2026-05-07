@@ -1212,9 +1212,7 @@ class Substrate:
             actor_id: Actor identifier.
             role: Role to register.
 
-        Raises:
-            SubstrateError: ``ACTOR_ROLE_NOT_REGISTERED`` if unregistering a
-                non-existent role. Duplicate registrations are silently idempotent.
+        Duplicate registrations are silently idempotent.
         """
         from ._actor_roles import register_actor_role as _register
 

@@ -12,6 +12,7 @@ from ._types import (
     Claim,
     DeadLetterEntry,
     Event,
+    HookContext,
     Link,
     QueryPage,
     ReplayReport,
@@ -155,8 +156,16 @@ class InMemorySubstrate:
             handler = self._hook_handlers.get(entry["hook_name"])
             if handler is None:
                 continue
+            ctx = HookContext(
+                hook_queue_id=entry["id"],
+                event_id=entry["event_id"],
+                work_item_id=entry.get("work_item_id", uuid.UUID(int=0)),
+                hook_name=entry["hook_name"],
+                transition=entry.get("transition"),
+                payload=entry.get("payload"),
+            )
             try:
-                handler(entry)
+                handler(ctx)
                 processed += 1
             except Exception:
                 entry["retry_count"] += 1
@@ -200,7 +209,7 @@ class InMemorySubstrate:
             )
 
         now = datetime.now(UTC)
-        self._workflows[key] = raw_dict
+        self._workflows[key] = wf.to_dict()
         self._workflow_defs[key] = wf
         self._workflow_hashes[key] = content_hash
         self._workflow_registered_at[key] = now
@@ -403,7 +412,7 @@ class InMemorySubstrate:
 
         transition_def = None
         for t in wf_data.get("transitions", []):
-            if t["name"] == transition_name and t["from"] == wi["current_state"]:
+            if t["name"] == transition_name and t["from_state"] == wi["current_state"]:
                 transition_def = t
                 break
 
@@ -428,7 +437,7 @@ class InMemorySubstrate:
             validate_field_update(wf_data, wi["work_item_type"], custom_fields)
             self._validate_refs_in_memory(wf_data, wi["work_item_type"], custom_fields)
 
-        new_state = transition_def["to"]
+        new_state = transition_def["to_state"]
 
         validator_name = transition_def.get("validator")
         if validator_name:
@@ -543,21 +552,24 @@ class InMemorySubstrate:
                 evts = [e for e in evts if e.event_seq < before_seq]
                 evts.sort(key=lambda e: e.event_seq, reverse=True)
                 return evts[:limit]
-        else:
-            evts = [e for el in self._events.values() for e in el]
-
-        if actor_id is not None:
-            evts = [e for e in evts if e.actor_id == actor_id]
-        if start is not None and end is not None:
-            evts = [e for e in evts if start <= e.timestamp <= end]
-        if transition is not None:
-            evts = [e for e in evts if e.transition == transition]
-
-        if work_item_id is not None:
             evts.sort(key=lambda e: e.event_seq)
             return evts[:limit]
-        evts.sort(key=lambda e: (e.timestamp, e.event_seq), reverse=True)
-        return evts[:limit]
+        if actor_id is not None:
+            evts = [e for el in self._events.values() for e in el]
+            evts = [e for e in evts if e.actor_id == actor_id]
+            evts.sort(key=lambda e: (e.timestamp, e.event_seq), reverse=True)
+            return evts[:limit]
+        if start is not None and end is not None:
+            evts = [e for el in self._events.values() for e in el]
+            evts = [e for e in evts if start <= e.timestamp <= end]
+            evts.sort(key=lambda e: e.timestamp)
+            return evts[:limit]
+        if transition is not None:
+            evts = [e for el in self._events.values() for e in el]
+            evts = [e for e in evts if e.transition == transition]
+            evts.sort(key=lambda e: (e.timestamp, e.event_seq), reverse=True)
+            return evts[:limit]
+        return []
 
     def read_events_since(
         self,
@@ -1011,7 +1023,7 @@ class InMemorySubstrate:
                     if wf_data:
                         for t in wf_data.get("transitions", []):
                             if t["name"] == evt.transition:
-                                derived_state = t["to"]
+                                derived_state = t["to_state"]
                                 break
                         p = evt.payload or {}
                         if "custom_fields_update" in p:
@@ -1044,14 +1056,15 @@ class InMemorySubstrate:
                 ErrorCode.HOOK_NOT_FOUND,
                 f"Dead letter entry {dead_letter_id} not found",
             )
+        payload = entry.get("payload") or {}
         self._hook_queue.append({
             "id": entry["original_hook_queue_id"] or len(self._hook_queue) + 1,
             "event_id": entry["event_id"],
-            "work_item_id": None,
+            "work_item_id": payload.get("work_item_id"),
             "hook_name": entry["hook_name"],
             "hook_type": entry["hook_type"],
-            "transition": None,
-            "payload": entry.get("payload"),
+            "transition": payload.get("transition"),
+            "payload": payload.get("event_payload"),
             "retry_count": 0,
             "max_retries": 3,
         })
