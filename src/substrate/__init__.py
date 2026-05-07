@@ -849,8 +849,13 @@ class Substrate:
 
         Raises:
             SubstrateError: ``CLAIM_CONTESTED``, ``NOT_BEFORE_FUTURE``,
-                ``WORK_ITEM_NOT_FOUND``.
+                ``WORK_ITEM_NOT_FOUND``, ``INVALID_ARGUMENT``.
         """
+        if ttl_seconds <= 0:
+            raise SubstrateError(
+                ErrorCode.INVALID_ARGUMENT,
+                "ttl_seconds must be positive",
+            )
         from ._claims import acquire_claim as _acquire
 
         timer = OpTimer(self._project, "acquire_claim")
@@ -898,8 +903,14 @@ class Substrate:
             The renewed ``Claim``.
 
         Raises:
-            SubstrateError: ``CLAIM_LOST``, ``CLAIM_NOT_FOUND``.
+            SubstrateError: ``CLAIM_LOST``, ``CLAIM_NOT_FOUND``,
+                ``INVALID_ARGUMENT``.
         """
+        if ttl_seconds <= 0:
+            raise SubstrateError(
+                ErrorCode.INVALID_ARGUMENT,
+                "ttl_seconds must be positive",
+            )
         from ._claims import heartbeat_claim as _heartbeat
 
         timer = OpTimer(self._project, "heartbeat_claim")

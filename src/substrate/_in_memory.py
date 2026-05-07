@@ -565,30 +565,28 @@ class InMemorySubstrate:
 
         if work_item_id is not None:
             evts = list(self._events.get(work_item_id, []))
-        else:
-            evts = [e for el in self._events.values() for e in el]
-
-        if before_seq is not None:
-            evts = [e for e in evts if e.event_seq < before_seq]
-            evts.sort(key=lambda e: e.event_seq, reverse=True)
-            evts = list(reversed(evts[:limit]))
-            return evts
-
-        if actor_id is not None:
-            evts = [e for e in evts if e.actor_id == actor_id]
-        if transition is not None:
-            evts = [e for e in evts if e.transition == transition]
-        if start is not None and end is not None:
-            evts = [e for e in evts if start <= e.timestamp <= end]
-
-        if work_item_id is not None:
+            if before_seq is not None:
+                evts = [e for e in evts if e.event_seq < before_seq]
+                evts.sort(key=lambda e: e.event_seq, reverse=True)
+                return list(reversed(evts[:limit]))
             evts.sort(key=lambda e: e.event_seq)
-        elif start is not None:
-            evts.sort(key=lambda e: e.timestamp)
-        else:
+            return evts[:limit]
+        if actor_id is not None:
+            evts = [e for el in self._events.values() for e in el]
+            evts = [e for e in evts if e.actor_id == actor_id]
             evts.sort(key=lambda e: (e.timestamp, e.event_seq), reverse=True)
-
-        return evts[:limit]
+            return evts[:limit]
+        if start is not None and end is not None:
+            evts = [e for el in self._events.values() for e in el]
+            evts = [e for e in evts if start <= e.timestamp <= end]
+            evts.sort(key=lambda e: e.timestamp)
+            return evts[:limit]
+        if transition is not None:
+            evts = [e for el in self._events.values() for e in el]
+            evts = [e for e in evts if e.transition == transition]
+            evts.sort(key=lambda e: (e.timestamp, e.event_seq), reverse=True)
+            return evts[:limit]
+        return []
 
     def read_events_since(
         self,
@@ -672,6 +670,11 @@ class InMemorySubstrate:
         *,
         event_id: uuid.UUID | None = None,
     ) -> Claim:
+        if ttl_seconds <= 0:
+            raise SubstrateError(
+                ErrorCode.INVALID_ARGUMENT,
+                "ttl_seconds must be positive",
+            )
         wi = self._work_items.get(work_item_id)
         if wi is None:
             raise SubstrateError(
@@ -763,6 +766,11 @@ class InMemorySubstrate:
         *,
         expected_attempt_number: int | None = None,
     ) -> Claim:
+        if ttl_seconds <= 0:
+            raise SubstrateError(
+                ErrorCode.INVALID_ARGUMENT,
+                "ttl_seconds must be positive",
+            )
         claim = self._claims.get(work_item_id)
         if claim is None:
             raise SubstrateError(

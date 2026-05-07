@@ -268,7 +268,10 @@ def validate_field_update(
     wits = wf_def.get("work_item_types", [])
     wit = next((t for t in wits if t["name"] == work_item_type), None)
     if wit is None:
-        return
+        raise SubstrateError(
+            ErrorCode.WORK_ITEM_TYPE_NOT_DECLARED,
+            f"Work-item type {work_item_type!r} not declared",
+        )
 
     field_defs = {f["name"]: f for f in wit.get("custom_fields", [])}
 
