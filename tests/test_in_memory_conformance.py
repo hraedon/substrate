@@ -184,7 +184,7 @@ class TestConformanceEvents:
 
     def test_event_idempotency(self, sub):
         eid = uuid.uuid4()
-        wi1, evt1 = sub.create_work_item(
+        _wi1, evt1 = sub.create_work_item(
             workflow_name="test_workflow",
             work_item_type="feature",
             actor_id="agent-1",
@@ -192,6 +192,45 @@ class TestConformanceEvents:
             event_id=eid,
         )
         assert evt1.event_id == eid
+
+    def test_read_events_composite_work_item_and_transition(self, sub):
+        wi, _ = sub.create_work_item(
+            workflow_name="test_workflow",
+            work_item_type="feature",
+            actor_id="agent-1",
+            custom_fields={"title": "composite"},
+        )
+        sub.transition(
+            wi.work_item_id, "start", "agent-1",
+            actor_metadata={"role": "agent"},
+        )
+        evts = sub.read_events(
+            work_item_id=wi.work_item_id, transition="created",
+        )
+        assert len(evts) == 1
+        assert all(e.transition == "created" for e in evts)
+
+        evts = sub.read_events(
+            work_item_id=wi.work_item_id, transition="start",
+        )
+        assert len(evts) == 1
+        assert all(e.transition == "start" for e in evts)
+
+    def test_read_events_composite_actor_and_transition(self, sub):
+        sub.create_work_item(
+            workflow_name="test_workflow",
+            work_item_type="feature",
+            actor_id="composite-agent",
+            custom_fields={"title": "composite actor"},
+        )
+        evts = sub.read_events(
+            actor_id="composite-agent", transition="created",
+        )
+        assert len(evts) == 1
+        assert all(
+            e.actor_id == "composite-agent" and e.transition == "created"
+            for e in evts
+        )
 
 
 class TestConformanceClaims:

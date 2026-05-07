@@ -26,7 +26,7 @@ class TestAC33PreSignedRejection:
 
 
 class TestAC34NoPostgresTypesLeak:
-    PG_TYPES = {"psycopg", "Connection", "Cursor", "ConnectionPool"}
+    PG_TYPES: frozenset[str] = frozenset({"psycopg", "Connection", "Cursor", "ConnectionPool"})
 
     def test_event_no_pg_types(self):
         from substrate._types import Event

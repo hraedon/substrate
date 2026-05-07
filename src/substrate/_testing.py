@@ -31,6 +31,12 @@ def raw_transaction(substrate) -> Generator[psycopg.Connection, None, None]:
 
 
 def drop_project_schema(dsn: str, project: str) -> None:
+    """Drop the Postgres schema for a project. Public API via ``substrate.testing``.
+
+    Args:
+        dsn: Postgres connection string.
+        project: Project (schema) name to drop.
+    """
     from psycopg.sql import SQL, Identifier
 
     conn = psycopg.connect(dsn, autocommit=True)

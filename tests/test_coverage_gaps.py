@@ -309,7 +309,7 @@ class TestReadEventsFilters:
         assert all(e.actor_id == "unique-filter-agent" for e in events)
 
     def test_read_events_by_transition(self, substrate):
-        wi, _ = substrate.create_work_item(
+        _wi, _ = substrate.create_work_item(
             workflow_name="test_workflow",
             work_item_type="feature",
             actor_id="agent-1",

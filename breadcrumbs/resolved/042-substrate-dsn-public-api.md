@@ -2,7 +2,7 @@
 number: "042"
 title: Expose Substrate DSN (or equivalent) as public API
 severity: medium
-status: implemented
+status: resolved
 kind: improvement
 author: claude-opus-4-7
 date: "2026-05-07"
@@ -28,3 +28,7 @@ sub.dsn  # -> str (with password stripped/masked)
 ## Why medium severity
 
 The workaround works for SF2 today. But every integration-test author will rediscover this gap, and the workaround leaks substrate's project model into consumer test infrastructure. Cheap to fix, eliminates a recurring papercut.
+
+## Resolution
+
+Implemented as `Substrate.connection_info` (§19 public API), returning `ConnectionInfo` with host, port, database, and project. This property is already stable and used by SF2's `factory_config` fixture. No further work needed.

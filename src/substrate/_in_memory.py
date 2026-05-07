@@ -81,7 +81,7 @@ class InMemorySubstrate:
         self,
         dsn: str = "",
         project: str = "test",
-        hmac_key_path: str | None = None,
+        hmac_key_path: str = "",
         *,
         pool_min: int = 1,
         pool_max: int = 10,
@@ -110,7 +110,7 @@ class InMemorySubstrate:
         cls,
         dsn: str = "",
         project: str = "test",
-        hmac_key_path: str | None = None,
+        hmac_key_path: str = "",
         *,
         pool_min: int = 1,
         pool_max: int = 10,
@@ -565,6 +565,12 @@ class InMemorySubstrate:
 
         if work_item_id is not None:
             evts = list(self._events.get(work_item_id, []))
+            if transition is not None:
+                evts = [e for e in evts if e.transition == transition]
+            if actor_id is not None:
+                evts = [e for e in evts if e.actor_id == actor_id]
+            if start is not None and end is not None:
+                evts = [e for e in evts if start <= e.timestamp <= end]
             if before_seq is not None:
                 evts = [e for e in evts if e.event_seq < before_seq]
                 evts.sort(key=lambda e: e.event_seq, reverse=True)
@@ -574,11 +580,17 @@ class InMemorySubstrate:
         if actor_id is not None:
             evts = [e for el in self._events.values() for e in el]
             evts = [e for e in evts if e.actor_id == actor_id]
+            if transition is not None:
+                evts = [e for e in evts if e.transition == transition]
+            if start is not None and end is not None:
+                evts = [e for e in evts if start <= e.timestamp <= end]
             evts.sort(key=lambda e: (e.timestamp, e.event_seq), reverse=True)
             return evts[:limit]
         if start is not None and end is not None:
             evts = [e for el in self._events.values() for e in el]
             evts = [e for e in evts if start <= e.timestamp <= end]
+            if transition is not None:
+                evts = [e for e in evts if e.transition == transition]
             evts.sort(key=lambda e: e.timestamp)
             return evts[:limit]
         if transition is not None:
@@ -1181,7 +1193,7 @@ class InMemorySubstrate:
         for (aid, role), created_at in self._actor_role_created.items():
             if actor_id is None or aid == actor_id:
                 result.append(ActorRole(actor_id=aid, role=role, created_at=created_at))
-        return sorted(result, key=lambda r: r.created_at)
+        return sorted(result, key=lambda r: (r.actor_id, r.role))
 
     @staticmethod
     def validate_actor_metadata(

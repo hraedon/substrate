@@ -14,6 +14,7 @@ from psycopg.sql import SQL, Identifier, Literal
 from ._errors import ErrorCode, SubstrateError
 from ._events import append_event
 from ._keys import KeySet
+from ._observability import Metrics
 from ._types import HookContext, ValidatorContext
 
 log = structlog.get_logger()
@@ -85,7 +86,7 @@ def poll_and_process_hooks(
     conn: psycopg.Connection,
     handlers: dict,
     key_set: KeySet,
-    metrics,
+    metrics: Metrics | None,
     project: str,
 ) -> int:
     conn.execute(
@@ -119,10 +120,17 @@ def poll_and_process_hooks(
             continue
 
         payload = row["payload"] or {}
+        raw_wi_id = payload.get("work_item_id")
+        if raw_wi_id is None:
+            log.error("hooks.missing_work_item_id", hook_id=hook_id, hook_name=hook_name)
+            _move_to_dead_letter(conn, row, "work_item_id missing from payload", key_set)
+            if metrics:
+                metrics.inc("hooks_dead_lettered", project)
+            continue
         ctx = HookContext(
             hook_queue_id=hook_id,
             event_id=row["event_id"],
-            work_item_id=uuid.UUID(payload.get("work_item_id", str(uuid.UUID(int=0)))),
+            work_item_id=uuid.UUID(raw_wi_id),
             hook_name=hook_name,
             transition=payload.get("transition"),
             payload=payload.get("event_payload"),
@@ -284,7 +292,7 @@ class HookConsumer:
         project: str,
         handlers: dict,
         key_set: KeySet,
-        metrics,
+        metrics: Metrics | None,
         poll_interval: float = 30.0,
     ) -> None:
         self._dsn = dsn

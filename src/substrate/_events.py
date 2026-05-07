@@ -403,3 +403,56 @@ def read_events_by_transition(
         [transition, limit],
     ).fetchall()
     return [_row_to_event(r) for r in rows]
+
+
+def read_events_composite(
+    conn: psycopg.Connection,
+    *,
+    work_item_id: uuid.UUID | None = None,
+    actor_id: str | None = None,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    transition: str | None = None,
+    limit: int = 100,
+    before_seq: int | None = None,
+) -> list[Event]:
+    clauses: list[str] = []
+    params: list = []
+
+    if work_item_id is not None:
+        clauses.append("work_item_id = %s")
+        params.append(work_item_id)
+    if actor_id is not None:
+        clauses.append("actor_id = %s")
+        params.append(actor_id)
+    if transition is not None:
+        clauses.append("transition = %s")
+        params.append(transition)
+    if start is not None and end is not None:
+        clauses.append("timestamp >= %s AND timestamp <= %s")
+        params.extend([start, end])
+    if before_seq is not None and work_item_id is not None:
+        clauses.append("event_seq < %s")
+        params.append(before_seq)
+
+    where_sql = ""
+    if clauses:
+        where_sql = "WHERE " + " AND ".join(clauses)
+
+    if work_item_id is not None:
+        order_sql = "ORDER BY event_seq DESC LIMIT %s"
+    elif start is not None and end is not None:
+        order_sql = "ORDER BY timestamp, event_seq LIMIT %s"
+    else:
+        order_sql = "ORDER BY timestamp DESC, event_seq DESC LIMIT %s"
+
+    params.append(limit)
+
+    rows = conn.execute(
+        SQL(f"SELECT {_EVENT_FIELDS} FROM events {where_sql} {order_sql}"),
+        params,
+    ).fetchall()
+
+    if work_item_id is not None:
+        return [_row_to_event(r) for r in reversed(rows)]
+    return [_row_to_event(r) for r in rows]

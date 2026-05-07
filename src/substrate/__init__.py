@@ -16,18 +16,6 @@ from ._events import (
 from ._events import (
     append_transition_event as _append_transition_event,
 )
-from ._events import (
-    read_events_by_actor as _read_by_actor,
-)
-from ._events import (
-    read_events_by_time_range as _read_by_range,
-)
-from ._events import (
-    read_events_by_transition as _read_by_transition,
-)
-from ._events import (
-    read_events_by_work_item as _read_by_work_item,
-)
 from ._integrity import SUBSTRATE_VERSION, check_integrity
 from ._keys import KeySet
 from ._migrations import run_migrations
@@ -52,6 +40,9 @@ from ._types import (
 )
 from ._types import (
     ConnectionInfo as ConnectionInfo,
+)
+from ._types import (
+    HookContext as HookContext,
 )
 from ._types import (
     ReplayReportEntry as ReplayReportEntry,
@@ -699,8 +690,8 @@ class Substrate:
         limit: int = 100,
         before_seq: int | None = None,
     ) -> list[Event]:
-        """Read events with structured filters. Exactly one filter dimension
-        should be provided.
+        """Read events with structured filters. Multiple filter dimensions
+        may be combined; results satisfy all provided criteria.
 
         Args:
             work_item_id: Filter by work item (supports ``before_seq`` pagination).
@@ -728,16 +719,19 @@ class Substrate:
                 ErrorCode.INVALID_FILTER,
                 "start and end must be provided together",
             )
+        from ._events import read_events_composite
+
         with self._mgr.transaction() as conn:
-            if work_item_id is not None:
-                return _read_by_work_item(conn, work_item_id, limit=limit, before_seq=before_seq)
-            if actor_id is not None:
-                return _read_by_actor(conn, actor_id, limit=limit)
-            if start is not None and end is not None:
-                return _read_by_range(conn, start, end, limit=limit)
-            if transition is not None:
-                return _read_by_transition(conn, transition, limit=limit)
-        return []
+            return read_events_composite(
+                conn,
+                work_item_id=work_item_id,
+                actor_id=actor_id,
+                start=start,
+                end=end,
+                transition=transition,
+                limit=limit,
+                before_seq=before_seq,
+            )
 
     def read_events_since(
         self,

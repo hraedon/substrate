@@ -7,6 +7,7 @@ import psycopg
 from psycopg.sql import SQL
 
 from ._errors import ErrorCode, SubstrateError
+from ._keys import KeySet
 from ._types import Claim
 
 
@@ -25,7 +26,7 @@ def acquire_claim(
     work_item_id: uuid.UUID,
     actor_id: str,
     ttl_seconds: int,
-    key_set,
+    key_set: KeySet,
     event_id: uuid.UUID | None = None,
 ) -> tuple[Claim, bool, bool]:
     from ._events import append_event, lock_work_item
@@ -169,7 +170,7 @@ def _check_escalation(
     conn: psycopg.Connection,
     wi: dict,
     attempt_number: int,
-    key_set,
+    key_set: KeySet,
 ) -> bool:
     from ._events import append_event
 
@@ -277,7 +278,7 @@ def release_claim(
     conn: psycopg.Connection,
     work_item_id: uuid.UUID,
     actor_id: str,
-    key_set,
+    key_set: KeySet,
     event_id: uuid.UUID | None = None,
 ) -> None:
     from ._events import append_event, lock_work_item
@@ -330,7 +331,7 @@ def release_claim(
         )
 
 
-def sweep_expired_claims(conn: psycopg.Connection, key_set) -> int:
+def sweep_expired_claims(conn: psycopg.Connection, key_set: KeySet) -> int:
     from ._events import append_event, lock_work_item
 
     now = datetime.now(UTC)

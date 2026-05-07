@@ -4,6 +4,84 @@ Structured log of development sessions and milestones.
 
 ---
 
+## 2026-05-07 — Session 14: GLM must-have/should-have items, composite read_events, public API closeouts
+
+**Focus:** Deliver 6 GLM items (3 must-have, 3 should-have) from SF2 Phase 2 integration sweep.
+
+**Context:** GLM requested HookContext public export, composite read_events filters, BC-042 closeout, public drop_project_schema, hmac_key_path contract fix, and Makefile + RUF rules.
+
+**Delivered:**
+
+1. **HookContext re-exported** — Added `HookContext as HookContext` to `src/substrate/__init__.py` so consumers can import it for handler type annotations.
+
+2. **Composite read_events filters** — Replaced "exactly one filter dimension" constraint with true AND composition in both backends:
+   - `src/substrate/_events.py`: Added `read_events_composite()` with layered SQL WHERE clauses
+   - `src/substrate/__init__.py`: `Substrate.read_events()` now delegates to composite query; docstring updated
+   - `src/substrate/_in_memory.py`: `InMemorySubstrate.read_events()` now layers filters instead of mutually-exclusive branches
+   - Added 2 conformance tests in `tests/test_in_memory_conformance.py` covering `work_item_id + transition` and `actor_id + transition`
+
+3. **BC-042 closed** — Moved to `breadcrumbs/resolved/` with resolution note. `connection_info` is stable public API.
+
+4. **drop_project_schema public API** — Exported from `substrate.testing` alongside `InMemorySubstrate`.
+
+5. **hmac_key_path contract fixed** — `InMemorySubstrate` parameter changed from `str | None = None` to `str = ""`, matching real `Substrate` which rejects `None`.
+
+6. **Makefile + RUF rules** — Added `Makefile` with `check`, `lint`, `test`, `cov` targets. Added `"RUF"` to ruff select. Fixed surfaced RUF012/RUF059 violations in 4 test files.
+
+7. **Breadcrumbs opened:**
+   - BC-043 (low): composite read_events ordering semantics undocumented
+   - BC-044 (low): test suite still imports drop_project_schema from _testing
+   - BC-045 (medium): InMemorySubstrate silently ignores hmac_key_path
+   - RFC-046 (medium): CI configuration for automated make check
+   - RFC-047 (low): remove unused pytest-postgresql / testcontainers dev dependencies
+
+8. **Breadcrumbs resolved:** BC-042.
+
+**Test Results:** 282 passed, lint clean.
+
+---
+
+## 2026-05-07 — Session 13 (continued): Correctness fixes, validation gaps, regression tests, breadcrumb filing
+
+**Focus:** Fix remaining correctness and validation issues identified during scan; add regression tests; file breadcrumbs for all fixes and remaining polish items.
+
+**Context:** User asked to knock out remaining items from the session 13 scan and file breadcrumbs.
+
+**Delivered:**
+
+1. **BC-044: `ttl_seconds` validation** — Added `INVALID_ARGUMENT` error code. `acquire_claim` and `heartbeat_claim` now reject zero/negative TTL in both Substrate and InMemorySubstrate.
+
+2. **BC-045: `validate_field_update` raises on unknown type** — Changed from silent return to `WORK_ITEM_TYPE_NOT_DECLARED`, matching `validate_field_values` behavior.
+
+3. **BC-046: Hook dispatch nil UUID fallback** — `poll_and_process_hooks` now dead-letters hooks with missing `work_item_id` instead of fabricating a nil UUID.
+
+4. **Type annotations tightened** — `_rebuild_wf` return type (`-> WorkflowDefinition`), `key_set: KeySet` in `_claims.py` (3 locations), `metrics: Metrics | None` in `_hooks.py` (2 locations), `SubstrateError.code` typed as `ErrorCode`.
+
+5. **InMemorySubstrate `list_actor_roles` sort order** — Changed from `created_at` to `(actor_id, role)` matching real backend.
+
+6. **8 new regression tests** (`tests/test_session13_regression.py`):
+   - `TestSweepRaceCondition` (2 tests): sweep doesn't clobber new claims
+   - `TestBeforeSeqOrdering` (2 tests): ascending order, exclusion semantics
+   - `TestTtlSecondsValidation` (3 tests): zero/negative rejection for acquire + heartbeat
+   - `TestValidateFieldUpdateRejectsUnknownType` (1 test): raises on undeclared type
+
+7. **Breadcrumbs filed:**
+   - BC-043 (high, resolved): sweep_expired_claims race condition
+   - BC-044 (medium, resolved): ttl_seconds validation
+   - BC-045 (medium, resolved): validate_field_update silent return
+   - BC-046 (medium, resolved): hook nil UUID fallback
+   - BC-047 (low, proposed): stuck hook double-processing
+   - BC-048 (low, proposed): InMemorySubstrate hook status tracking
+   - BC-049 (low, proposed): zero-roles bypass
+
+**Breadcrumbs resolved:** BC-043, BC-044, BC-045, BC-046.
+
+**Test Results:** 278 passed in 108.18s
+
+**Lint:** clean
+
+---
+
 ## 2026-05-07 — Session 13: Remaining session-12 items, fresh scan fixes, BC-042 implementation
 
 **Focus:** Pick up session 12's remaining items; fresh scan for additional issues; fix all MEDIUM-severity bugs found.

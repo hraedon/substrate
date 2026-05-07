@@ -226,7 +226,7 @@ class TestContinueOnRevokedReplay:
         assert report.warnings == 0
 
     def test_replay_report_warnings_default_zero(self, substrate):
-        wi, _ = substrate.create_work_item(
+        _wi, _ = substrate.create_work_item(
             workflow_name="test_workflow",
             work_item_type="feature",
             actor_id="agent-1",

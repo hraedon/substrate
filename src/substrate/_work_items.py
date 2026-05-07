@@ -9,7 +9,7 @@ from psycopg.sql import SQL
 from ._errors import ErrorCode, SubstrateError
 from ._events import append_event
 from ._keys import KeySet
-from ._types import Event, QueryPage, WorkItem
+from ._types import Event, QueryPage, WorkflowDefinition, WorkItem
 from ._workflow import validate_field_values, validate_work_item_refs
 
 _WORK_ITEM_FIELDS = (
@@ -150,7 +150,7 @@ def create_work_item(
     return _row_to_work_item(wi_row), event
 
 
-def _rebuild_wf(data: dict):
+def _rebuild_wf(data: dict) -> WorkflowDefinition:
     from ._types import (
         CustomFieldDef,
         LinkTypeDef,
