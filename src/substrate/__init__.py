@@ -67,7 +67,7 @@ _VALID_ACTOR_KINDS = {"agent", "human", "system"}
 def _validate_actor_kind(actor_kind: str) -> None:
     if actor_kind not in _VALID_ACTOR_KINDS:
         raise SubstrateError(
-            ErrorCode.CUSTOM_FIELD_VIOLATION,
+            ErrorCode.INVALID_ACTOR_KIND,
             f"Invalid actor_kind {actor_kind!r}. Must be one of {sorted(_VALID_ACTOR_KINDS)}",
         )
 
@@ -1213,7 +1213,8 @@ class Substrate:
             role: Role to register.
 
         Raises:
-            SubstrateError: ``ACTOR_ROLE_ALREADY_REGISTERED``.
+            SubstrateError: ``ACTOR_ROLE_NOT_REGISTERED`` if unregistering a
+                non-existent role. Duplicate registrations are silently idempotent.
         """
         from ._actor_roles import register_actor_role as _register
 

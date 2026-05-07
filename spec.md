@@ -291,7 +291,8 @@ Retention: indefinite for v1. Future move when needed: month-partition `events` 
 | Replay drift detected | Replay output differs from live `work_items_current` | Record in `replay_report` as `replayed_drift`; replay continues; operator action required | Operator alert via report |
 | Concurrent workflow version registration | Two registrations of same `(name, version)` | Same content → idempotent (returns existing row); different content → rejects with `WORKFLOW_VERSION_CONFLICT` | Caller sees idempotent success or rejection |
 | Actor role not authorized | Actor claims role not in their registered set | Reject with `ACTOR_ROLE_NOT_AUTHORIZED`; detail includes `actor_id`, `claimed_role`, `allowed_roles` | Caller sees rejection |
-| Actor role already registered | Duplicate `register_actor_role` for same `(actor_id, role)` | Reject with `ACTOR_ROLE_ALREADY_REGISTERED` | Caller sees rejection |
+| Actor role already registered | Duplicate `register_actor_role` for same `(actor_id, role)` | Idempotent — silently returns without error | Caller sees idempotent success |
+| Invalid actor kind | `actor_kind` not in {agent, human, system} | Reject with `INVALID_ACTOR_KIND` | Caller sees rejection |
 | Actor role not registered | `unregister_actor_role` for nonexistent mapping | Reject with `ACTOR_ROLE_NOT_REGISTERED` | Caller sees rejection |
 | Validator performs I/O (contract violation) | Validator code calls out to network/disk | Behavior undefined; operator-actionable structured log; treat as bug | Structured log |
 

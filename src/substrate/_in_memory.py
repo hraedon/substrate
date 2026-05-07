@@ -22,7 +22,8 @@ from ._types import (
 )
 from ._workflow import (
     compute_content_hash,
-    parse_and_validate,
+    parse_workflow_yaml,
+    validate_and_build,
     validate_field_update,
     validate_field_values,
 )
@@ -36,7 +37,7 @@ _VALID_ACTOR_KINDS = {"agent", "human", "system"}
 def _validate_actor_kind(actor_kind: str) -> None:
     if actor_kind not in _VALID_ACTOR_KINDS:
         raise SubstrateError(
-            ErrorCode.CUSTOM_FIELD_VIOLATION,
+            ErrorCode.INVALID_ACTOR_KIND,
             f"Invalid actor_kind {actor_kind!r}. Must be one of {sorted(_VALID_ACTOR_KINDS)}",
         )
 
@@ -99,7 +100,7 @@ class InMemorySubstrate:
         self._validators: dict[str, Callable] = {}
         self._hook_handlers: dict[str, Callable] = {}
         self._hook_queue: list[dict] = []
-        self._dead_letter: list[dict] = {}
+        self._dead_letter: dict[int, dict] = {}
         self._hook_consumer_running = False
 
     @classmethod
@@ -147,8 +148,6 @@ class InMemorySubstrate:
         self._hook_consumer_running = False
 
     def poll_hooks(self) -> int:
-        from ._hooks import run_hook_handler
-
         pending = list(self._hook_queue)
         self._hook_queue.clear()
         processed = 0
@@ -157,7 +156,7 @@ class InMemorySubstrate:
             if handler is None:
                 continue
             try:
-                run_hook_handler(handler, entry)
+                handler(entry)
                 processed += 1
             except Exception:
                 entry["retry_count"] += 1
@@ -179,7 +178,8 @@ class InMemorySubstrate:
         return processed
 
     def register_workflow(self, yaml_content: str) -> WorkflowVersion:
-        wf = parse_and_validate(yaml_content)
+        raw_dict = parse_workflow_yaml(yaml_content)
+        wf = validate_and_build(raw_dict, yaml_content)
         content_hash = compute_content_hash(wf)
         key = (wf.name, wf.version)
 
@@ -198,9 +198,6 @@ class InMemorySubstrate:
                 ),
                 registered_at=self._workflow_registered_at[key],
             )
-
-        from ._workflow import parse_workflow_yaml
-        raw_dict = parse_workflow_yaml(yaml_content)
 
         now = datetime.now(UTC)
         self._workflows[key] = raw_dict
@@ -544,12 +541,10 @@ class InMemorySubstrate:
             evts = list(self._events.get(work_item_id, []))
             if before_seq is not None:
                 evts = [e for e in evts if e.event_seq < before_seq]
-        elif actor_id is not None or start is not None or transition is not None:
-            evts = []
-            for evt_list in self._events.values():
-                evts.extend(evt_list)
+                evts.sort(key=lambda e: e.event_seq, reverse=True)
+                return evts[:limit]
         else:
-            return []
+            evts = [e for el in self._events.values() for e in el]
 
         if actor_id is not None:
             evts = [e for e in evts if e.actor_id == actor_id]
@@ -557,8 +552,12 @@ class InMemorySubstrate:
             evts = [e for e in evts if start <= e.timestamp <= end]
         if transition is not None:
             evts = [e for e in evts if e.transition == transition]
-        evts = sorted(evts, key=lambda e: e.event_seq)
-        return evts[-limit:] if len(evts) > limit else evts
+
+        if work_item_id is not None:
+            evts.sort(key=lambda e: e.event_seq)
+            return evts[:limit]
+        evts.sort(key=lambda e: (e.timestamp, e.event_seq), reverse=True)
+        return evts[:limit]
 
     def read_events_since(
         self,
@@ -702,6 +701,7 @@ class InMemorySubstrate:
                     "new_actor_id": actor_id,
                     "attempt_number": attempt_number,
                 },
+                actor_id=actor_id,
             )
         else:
             self._append_claim_event(
@@ -711,6 +711,7 @@ class InMemorySubstrate:
                     "ttl_seconds": ttl_seconds,
                     "attempt_number": attempt_number,
                 },
+                actor_id=actor_id,
             )
 
         self._check_escalation(wi, attempt_number)
@@ -793,6 +794,7 @@ class InMemorySubstrate:
             self._append_claim_event(
                 wi, event_id or uuid.uuid4(), "claim_released",
                 {"actor_id": actor_id},
+                actor_id=actor_id,
             )
 
     def sweep_expired_claims(self) -> int:
@@ -810,6 +812,7 @@ class InMemorySubstrate:
                 self._append_claim_event(
                     wi, uuid.uuid4(), "claim_expired",
                     {"actor_id": claim["actor_id"], "expired_at": now.isoformat()},
+                    actor_id=claim["actor_id"] or "system",
                 )
         return len(expired)
 
@@ -972,15 +975,37 @@ class InMemorySubstrate:
                 continue
             derived_state = None
             derived_fields: dict = {}
+            derived_needs_review = False
+            derived_not_before = None
+            derived_last_seq = 0
             for evt in sorted(evts, key=lambda e: e.event_seq):
+                derived_last_seq = evt.event_seq
                 if evt.transition == "created":
                     p = evt.payload or {}
                     derived_state = p.get("initial_state")
                     derived_fields = p.get("custom_fields", {})
+                    nb = p.get("not_before")
+                    if nb:
+                        derived_not_before = (
+                            datetime.fromisoformat(nb)
+                            if isinstance(nb, str) else nb
+                        )
                 elif evt.transition in ("claim_acquired", "claim_released", "claim_expired",
-                                        "claim_stolen", "escalated", "not_before_set",
-                                        "link_created", "link_removed"):
+                                        "claim_stolen", "link_created", "link_removed",
+                                        "hook_dead_lettered"):
                     pass
+                elif evt.transition == "escalated":
+                    derived_needs_review = True
+                elif evt.transition == "not_before_set":
+                    p = evt.payload or {}
+                    nb = p.get("not_before")
+                    if nb:
+                        derived_not_before = (
+                            datetime.fromisoformat(nb)
+                            if isinstance(nb, str) else nb
+                        )
+                    else:
+                        derived_not_before = None
                 else:
                     wf_data = self._workflows.get((wi["workflow_name"], wi["workflow_version"]))
                     if wf_data:
@@ -996,6 +1021,9 @@ class InMemorySubstrate:
                 if (
                     derived_state != wi["current_state"]
                     or derived_fields != (wi["custom_fields"] or {})
+                    or derived_needs_review != wi.get("needs_review", False)
+                    or derived_not_before != wi.get("not_before")
+                    or derived_last_seq != wi.get("last_event_seq", 0)
                 ):
                     drift += 1
                 else:
@@ -1203,27 +1231,27 @@ class InMemorySubstrate:
         if threshold is None or attempt_number < threshold:
             return
         existing = any(
-            e.transition == "escalated" and e.work_item_id == wi["work_item_id"]
-            for evts in self._events.values()
-            for e in evts
+            e.transition == "escalated"
+            for e in self._events.get(wi["work_item_id"], [])
         )
         if existing:
             return
         wi["needs_review"] = True
         self._append_claim_event(
-            wi, uuid.uuid4(), "system", "escalated",
+            wi, uuid.uuid4(), "escalated",
             {"attempt_number": attempt_number, "threshold": threshold},
         )
 
     def _append_claim_event(
         self, wi: dict, event_id: uuid.UUID, transition: str, payload: dict,
+        *, actor_id: str = "system",
     ) -> None:
         now = datetime.now(UTC)
         evt = _make_event(
             event_id=event_id,
             work_item_id=wi["work_item_id"],
             event_seq=wi["next_event_seq"],
-            actor_id="system",
+            actor_id=actor_id,
             actor_kind="system",
             actor_metadata=None,
             workflow_name=wi["workflow_name"],

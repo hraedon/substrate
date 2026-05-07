@@ -211,6 +211,12 @@ def parse_and_validate(raw_yaml: str) -> WorkflowDefinition:
     return build_definition(data, raw_yaml)
 
 
+def validate_and_build(data: dict, raw_yaml: str) -> WorkflowDefinition:
+    validate_json_schema(data)
+    _validate_semantics(data)
+    return build_definition(data, raw_yaml)
+
+
 def parse_file(path: str | Path) -> WorkflowDefinition:
     return parse_and_validate(Path(path).read_text())
 

@@ -4,6 +4,46 @@ Structured log of development sessions and milestones.
 
 ---
 
+## 2026-05-07 — Session 11: Validation scan — InMemorySubstrate bug fixes, BC-036 resolution, error-code cleanup
+
+**Focus:** Deep validation scan of the repo after Deepseek's session 10 work; fix all bugs found; close remaining breadcrumbs.
+
+**Context:** User asked for a comprehensive validation of the repo's current state. A thorough scan of `_in_memory.py` and recent commits revealed 10 issues ranging from critical to low.
+
+**Delivered:**
+
+1. **CRITICAL: `_check_escalation` wrong argument count** — `_in_memory.py` called `_append_claim_event(wi, uuid.uuid4(), "system", "escalated", {...})` with 5 args; function takes 4. Would crash at runtime on escalation. Fixed by removing stray `"system"` arg.
+
+2. **CRITICAL: `poll_hooks` imports non-existent `run_hook_handler`** — `_in_memory.py` imported `from ._hooks import run_hook_handler` which doesn't exist in `_hooks.py`. Would crash with `ImportError`. Fixed by removing the import and calling the handler directly.
+
+3. **HIGH: InMemorySubstrate replay missing `needs_review`, `not_before`, `last_event_seq` drift detection** — Replay only checked `current_state` and `custom_fields` for drift; the real Substrate checks all 5 fields. Added `derived_needs_review`, `derived_not_before`, `derived_last_seq` tracking and full 5-field comparison. Also added `hook_dead_lettered` to the skip list and `not_before_set`/`escalated` as tracked transitions.
+
+4. **HIGH: Claim events used wrong `actor_id`** — `_append_claim_event` hardcoded `actor_id="system"` for all claim events. The real Substrate uses the actual claiming/releasing actor. Added `actor_id` keyword argument; wired correct actor_id at all call sites (acquire=actor_id, release=actor_id, expire=prior_actor_id or "system").
+
+5. **MEDIUM: `_dead_letter` typed as `list[dict]` but used as `dict[int, dict]`** — Fixed type annotation.
+
+6. **MEDIUM: `read_events` returned ASC order vs real Substrate's DESC** — Rewrote to match real Substrate's ordering semantics per filter type (DESC for work_item_id then reversed, DESC for actor/transition, ASC for time-range, ASC for since).
+
+7. **LOW: Stale `ACTOR_ROLE_ALREADY_REGISTERED` in ErrorCode enum** — Removed from `_errors.py`. Updated `__init__.py` docstring to reflect idempotent behavior. Updated `spec.md` error table.
+
+8. **LOW: `CUSTOM_FIELD_VIOLATION` misused for `actor_kind` validation** — Added `INVALID_ACTOR_KIND` error code to `_errors.py`. Updated both `__init__.py` and `_in_memory.py` to use it.
+
+9. **BC-036 resolved** — External Postgres deployment guide (RFC) was already complete with "accepted" status. Moved from `breadcrumbs/rfc/` to `breadcrumbs/resolved/`.
+
+10. **InMemorySubstrate double YAML parse** — `register_workflow` called both `parse_and_validate` (which parses YAML) and `parse_workflow_yaml` (which parses the same YAML again). Added `validate_and_build()` to `_workflow.py` accepting a pre-parsed dict; InMemorySubstrate now parses once.
+
+**Breadcrumbs filed:** Two pending drafts:
+- `in-memory-read-events-filter-semantics.md` — InMemorySubstrate composites filters; real Substrate is mutually exclusive
+- `in-memory-conformance-coverage-gaps.md` — Missing conformance tests for claim actor_id, dead-letter, replay drift, sort order
+
+**Open breadcrumbs:** 0 numbered. 6 pending drafts awaiting triage.
+
+**Test Results:** 262 passed in 106.68s
+
+**Lint:** clean
+
+---
+
 ## 2026-05-07 — Session 10: BC-037 runtime ref validation, BC-033/034/035 RFCs, BC-038 in-memory backend
 
 **Focus:** Resolve all actionable open breadcrumbs — BC-037 (high bug), BC-033/034/035 (RFCs), BC-038 (in-memory backend).
