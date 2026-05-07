@@ -198,23 +198,6 @@
                       "enum_values"
                     ]
                   }
-                },
-                {
-                  "if": {
-                    "properties": {
-                      "type": {
-                        "const": "work_item_ref"
-                      }
-                    },
-                    "required": [
-                      "type"
-                    ]
-                  },
-                  "then": {
-                    "required": [
-                      "target_work_item_type"
-                    ]
-                  }
                 }
               ]
             }

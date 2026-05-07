@@ -145,6 +145,7 @@ class TestSF2WorkflowRoundtripV2:
     def test_version_pinning_across_v1_v2(self, substrate):
         substrate.register_actor_role("arch-5", "interface_architect")
         substrate.register_actor_role("imp-5", "implementer")
+        substrate.register_actor_role("ta-5", "test_author")
 
         wi1, _ = substrate.create_work_item(
             workflow_name="software_factory",
@@ -161,6 +162,18 @@ class TestSF2WorkflowRoundtripV2:
 
         substrate.register_workflow_file(FULL_PIPELINE_PATH)
 
+        ts, _ = substrate.create_work_item(
+            workflow_name="software_factory",
+            work_item_type="test_suite",
+            actor_id="ta-5",
+            actor_kind="agent",
+            actor_metadata={"role": "test_author"},
+            custom_fields={
+                "interface_ref": str(wi1.work_item_id),
+                "ac_coverage": ["AC-01"],
+            },
+        )
+
         wi2, _ = substrate.create_work_item(
             workflow_name="software_factory",
             work_item_type="implementation",
@@ -169,7 +182,7 @@ class TestSF2WorkflowRoundtripV2:
             actor_metadata={"role": "implementer"},
             custom_fields={
                 "interface_ref": str(wi1.work_item_id),
-                "test_suite_ref": str(wi1.work_item_id),
+                "test_suite_ref": str(ts.work_item_id),
             },
         )
         assert wi2.workflow_version == 2
@@ -193,6 +206,7 @@ class TestSF2WorkflowRoundtripV2:
         substrate.register_workflow_file(FULL_PIPELINE_PATH)
         substrate.register_actor_role("arch-6", "interface_architect")
         substrate.register_actor_role("imp-6", "implementer")
+        substrate.register_actor_role("ta-6", "test_author")
 
         wi1, _ = substrate.create_work_item(
             workflow_name="software_factory",
@@ -205,6 +219,17 @@ class TestSF2WorkflowRoundtripV2:
                 "ac_ids": ["AC-01"],
             },
         )
+        ts, _ = substrate.create_work_item(
+            workflow_name="software_factory",
+            work_item_type="test_suite",
+            actor_id="ta-6",
+            actor_kind="agent",
+            actor_metadata={"role": "test_author"},
+            custom_fields={
+                "interface_ref": str(wi1.work_item_id),
+                "ac_coverage": ["AC-01"],
+            },
+        )
         wi2, _ = substrate.create_work_item(
             workflow_name="software_factory",
             work_item_type="implementation",
@@ -213,7 +238,7 @@ class TestSF2WorkflowRoundtripV2:
             actor_metadata={"role": "implementer"},
             custom_fields={
                 "interface_ref": str(wi1.work_item_id),
-                "test_suite_ref": str(wi1.work_item_id),
+                "test_suite_ref": str(ts.work_item_id),
             },
         )
 

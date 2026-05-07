@@ -4,6 +4,47 @@ Structured log of development sessions and milestones.
 
 ---
 
+## 2026-05-07 — Session 10: BC-037 runtime ref validation, BC-033/034/035 RFCs, BC-038 in-memory backend
+
+**Focus:** Resolve all actionable open breadcrumbs — BC-037 (high bug), BC-033/034/035 (RFCs), BC-038 (in-memory backend).
+
+**Context:** Session 9 left 6 open breadcrumbs. User asked to start with BC-037, then knock out BC-033-035, then tackle BC-038.
+
+**Delivered:**
+
+1. **BC-037 — Runtime validation for `work_item_ref` fields** (high bug → resolved):
+   - `src/substrate/_workflow.py`: Added `import uuid`; updated `_coerce_field` to validate UUID format for `work_item_ref` type; added `validate_work_item_refs()` function that queries `work_items_current` to verify existence and type match.
+   - `src/substrate/_work_items.py`: Wired `validate_work_item_refs` into `create_work_item` after `validate_field_values`.
+   - `src/substrate/__init__.py`: Wired `validate_work_item_refs` into `transition` after `validate_field_update`.
+   - `src/substrate/_workflow_schema.json`: Made `target_work_item_type` optional for `work_item_ref` fields. Fields without `target_work_item_type` still check existence only.
+   - `tests/test_work_item_ref_validation.py`: 10 new tests covering nonexistent UUID, wrong type, correct type, invalid format, optional None, untyped ref existence, transition-time validation.
+   - `tests/test_sf2_workflows.py`: Fixed `test_version_pinning_across_v1_v2` and `test_full_pipeline_link_types` — both incorrectly set `test_suite_ref` to an `interface_spec` work item.
+
+2. **BC-033 — PgBouncer transaction-mode documentation** (medium RFC → implemented):
+   - `AGENTS.md`: Added "Known constraints" section documenting PgBouncer incompatibility.
+
+3. **BC-034 — No-comments onboarding documentation** (low RFC → implemented):
+   - `AGENTS.md`: Expanded "No comments in code" convention with full rationale.
+
+4. **BC-035 — Telemetry-via-hooks worked example** (low RFC → implemented):
+   - `examples/telemetry_via_hooks.py`: Complete, runnable minimal example.
+   - `AGENTS.md`: Updated telemetry pattern section to link to example file.
+
+5. **BC-038 — InMemorySubstrate** (high improvement → resolved):
+   - `src/substrate/_in_memory.py`: Full `InMemorySubstrate` implementation (~1260 lines) matching the complete public API surface of `Substrate` (32 methods/properties). Implements workflow registration, work item CRUD, transitions, event logging, claims with TTL, links, actor roles, validators, hooks, replay, update_not_before, dead letter queue, and all query/filter operations — all in-process with no Postgres dependency. Reuses existing validation logic from `_workflow.py`.
+   - `src/substrate/testing.py`: Public module exporting `InMemorySubstrate` as `substrate.testing.InMemorySubstrate`.
+   - `tests/test_in_memory_conformance.py`: 50 conformance tests (25 scenarios × 2 backends) parameterized over real Substrate and InMemorySubstrate. Covers workflow registration, work item creation, transitions, events, claims, links, actor roles, queries, replay, and update_not_before.
+
+**Breadcrumbs resolved:** BC-037, BC-033, BC-034, BC-035, BC-038.
+
+**Remaining open:** BC-036 (external Postgres guide, accepted). Four pending drafts awaiting triage.
+
+**Test Results:** 258 passed in 48.13s (+ 4 slow benchmarks excluded)
+
+**Lint:** clean
+
+---
+
 ## 2026-05-06 — Session 9: Error-path coverage sweep + Perplexity RFCs
 
 **Focus:** Close error-path coverage gaps identified by unfiled audits; formalize Perplexity feedback as RFCs.

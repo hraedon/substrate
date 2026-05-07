@@ -582,8 +582,9 @@ class Substrate:
                     check_actor_role_authorized(conn, actor_id, role)
 
                 if custom_fields:
-                    from ._workflow import validate_field_update
+                    from ._workflow import validate_field_update, validate_work_item_refs
                     validate_field_update(defn, wi_row["work_item_type"], custom_fields)
+                    validate_work_item_refs(conn, defn, wi_row["work_item_type"], custom_fields)
 
                 new_state = transition_def["to_state"]
 

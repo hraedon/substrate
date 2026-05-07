@@ -10,7 +10,7 @@ from ._errors import ErrorCode, SubstrateError
 from ._events import append_event
 from ._keys import KeySet
 from ._types import Event, QueryPage, WorkItem
-from ._workflow import validate_field_values
+from ._workflow import validate_field_values, validate_work_item_refs
 
 _WORK_ITEM_FIELDS = (
     "work_item_id, workflow_name, workflow_version, work_item_type, "
@@ -98,6 +98,7 @@ def create_work_item(
         )
 
     validated_fields = validate_field_values(wf, work_item_type, custom_fields or {})
+    validate_work_item_refs(conn, def_data, work_item_type, validated_fields)
 
     work_item_id = uuid.uuid4()
     initial_state = wf.initial_state

@@ -4,7 +4,7 @@
 number: "033"
 title: Schema-per-project and PgBouncer transaction-mode incompatibility
 severity: medium
-status: proposed
+status: implemented
 kind: design
 author: perplexity-review
 related: []

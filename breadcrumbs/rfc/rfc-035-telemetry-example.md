@@ -4,7 +4,7 @@
 number: "035"
 title: Telemetry-via-hooks pattern needs a concrete worked example
 severity: low
-status: proposed
+status: implemented
 kind: improvement
 author: perplexity-review
 related: ["024"]

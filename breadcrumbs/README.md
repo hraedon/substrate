@@ -9,7 +9,7 @@ Defects, design questions, and improvements for substrate. One file per item, nu
 number: "001"
 title: Short descriptive title
 severity: critical | high | medium | low
-status: proposed | in_progress | implemented | obsolete
+status: proposed | in_progress | implemented | accepted | obsolete
 kind: bug | design | improvement
 author: who-raised-it
 date: "YYYY-MM-DD"
@@ -29,15 +29,14 @@ related: ["002", "003"]
 
 | # | Title | Severity | Status |
 |---|---|---|---|
-| 033 | Schema-per-project incompatible with PgBouncer transaction mode | medium | proposed |
-| 034 | "No comments in code" style rule creates onboarding cliff | low | proposed |
-| 035 | Telemetry-via-hooks pattern needs a concrete worked example | low | proposed |
-| 036 | External Postgres as a backend — adapter abstraction | medium | proposed |
+| 036 | External Postgres deployment guide | n/a | accepted |
 
 ## Resolved
 
 | # | Title | Severity | Resolution |
 |---|---|---|---|
+| 038 | Ship first-class test fixtures / in-memory backend for downstream consumers | high | [resolved/038](resolved/038-in-memory-test-fixtures.md) |
+| 037 | work_item_ref fields accept any UUID — no existence or type enforcement at runtime | high | [resolved/037](resolved/037-work-item-ref-no-runtime-validation.md) |
 | 001 | Replay does not verify signatures or check key status | high | [resolved/001](resolved/001-replay-no-signature-verification.md) |
 | 002 | Replay output table contains live snapshot, not derived state | medium | [resolved/002](resolved/002-replay-table-live-snapshot.md) |
 | 003 | Drift detection compares only current_state and last_event_seq | high | [resolved/003](resolved/003-drift-detection-incomplete.md) |

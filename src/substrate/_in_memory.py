@@ -1,0 +1,1304 @@
+from __future__ import annotations
+
+import uuid
+from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+
+from ._errors import ErrorCode, SubstrateError
+from ._integrity import SUBSTRATE_VERSION
+from ._types import (
+    ActorRole,
+    Claim,
+    DeadLetterEntry,
+    Event,
+    Link,
+    QueryPage,
+    ReplayReport,
+    ValidatorContext,
+    WorkflowDefinition,
+    WorkflowVersion,
+    WorkItem,
+)
+from ._workflow import (
+    compute_content_hash,
+    parse_and_validate,
+    validate_field_update,
+    validate_field_values,
+)
+
+_DUMMY_KEY_ID = "in-memory"
+_DUMMY_SIG = b"\x00" * 32
+_DUMMY_HASH = b"\x00" * 32
+_VALID_ACTOR_KINDS = {"agent", "human", "system"}
+
+
+def _validate_actor_kind(actor_kind: str) -> None:
+    if actor_kind not in _VALID_ACTOR_KINDS:
+        raise SubstrateError(
+            ErrorCode.CUSTOM_FIELD_VIOLATION,
+            f"Invalid actor_kind {actor_kind!r}. Must be one of {sorted(_VALID_ACTOR_KINDS)}",
+        )
+
+
+def _make_event(
+    event_id: uuid.UUID,
+    work_item_id: uuid.UUID,
+    event_seq: int,
+    actor_id: str,
+    actor_kind: str,
+    actor_metadata: dict | None,
+    workflow_name: str,
+    workflow_version: int,
+    transition: str | None,
+    payload: dict | None,
+    timestamp: datetime,
+) -> Event:
+    return Event(
+        event_id=event_id,
+        work_item_id=work_item_id,
+        event_seq=event_seq,
+        actor_id=actor_id,
+        actor_kind=actor_kind,
+        actor_metadata=actor_metadata,
+        key_id=_DUMMY_KEY_ID,
+        workflow_name=workflow_name,
+        workflow_version=workflow_version,
+        timestamp=timestamp,
+        transition=transition,
+        payload=payload,
+        payload_canonical_hash=_DUMMY_HASH,
+        signature=_DUMMY_SIG,
+        canonical_envelope=_DUMMY_SIG,
+    )
+
+
+class InMemorySubstrate:
+    def __init__(
+        self,
+        dsn: str = "",
+        project: str = "test",
+        hmac_key_path: str | None = None,
+        *,
+        pool_min: int = 1,
+        pool_max: int = 10,
+        prometheus_registry=None,
+    ) -> None:
+        self._project = project
+        self._workflows: dict[tuple[str, int], dict] = {}
+        self._workflow_defs: dict[tuple[str, int], WorkflowDefinition] = {}
+        self._workflow_hashes: dict[tuple[str, int], bytes] = {}
+        self._workflow_registered_at: dict[tuple[str, int], datetime] = {}
+        self._work_items: dict[uuid.UUID, dict] = {}
+        self._events: dict[uuid.UUID, list[Event]] = {}
+        self._event_id_index: dict[uuid.UUID, Event] = {}
+        self._claims: dict[uuid.UUID, dict] = {}
+        self._links: list[dict] = []
+        self._actor_roles: set[tuple[str, str]] = set()
+        self._actor_role_created: dict[tuple[str, str], datetime] = {}
+        self._validators: dict[str, Callable] = {}
+        self._hook_handlers: dict[str, Callable] = {}
+        self._hook_queue: list[dict] = []
+        self._dead_letter: list[dict] = {}
+        self._hook_consumer_running = False
+
+    @classmethod
+    def create_project(
+        cls,
+        dsn: str = "",
+        project: str = "test",
+        hmac_key_path: str | None = None,
+        *,
+        pool_min: int = 1,
+        pool_max: int = 10,
+        prometheus_registry=None,
+    ) -> InMemorySubstrate:
+        return cls(
+            dsn, project, hmac_key_path,
+            pool_min=pool_min, pool_max=pool_max,
+            prometheus_registry=prometheus_registry,
+        )
+
+    def close(self) -> None:
+        pass
+
+    @property
+    def project(self) -> str:
+        return self._project
+
+    @property
+    def substrate_version(self) -> str:
+        return SUBSTRATE_VERSION
+
+    @property
+    def prometheus_registry(self):
+        return None
+
+    def register_validator(self, name: str, handler: Callable) -> None:
+        self._validators[name] = handler
+
+    def register_hook_handler(self, name: str, handler: Callable) -> None:
+        self._hook_handlers[name] = handler
+
+    def start_hook_consumer(self) -> None:
+        self._hook_consumer_running = True
+
+    def stop_hook_consumer(self) -> None:
+        self._hook_consumer_running = False
+
+    def poll_hooks(self) -> int:
+        from ._hooks import run_hook_handler
+
+        pending = list(self._hook_queue)
+        self._hook_queue.clear()
+        processed = 0
+        for entry in pending:
+            handler = self._hook_handlers.get(entry["hook_name"])
+            if handler is None:
+                continue
+            try:
+                run_hook_handler(handler, entry)
+                processed += 1
+            except Exception:
+                entry["retry_count"] += 1
+                max_retries = entry.get("max_retries", 3)
+                if entry["retry_count"] >= max_retries:
+                    self._dead_letter[entry["id"]] = {
+                        "id": entry["id"],
+                        "event_id": entry["event_id"],
+                        "hook_name": entry["hook_name"],
+                        "hook_type": entry.get("hook_type", "transition"),
+                        "payload": entry.get("payload"),
+                        "retry_count": entry["retry_count"],
+                        "error_message": "handler failed",
+                        "dead_lettered_at": datetime.now(UTC),
+                        "original_hook_queue_id": entry["id"],
+                    }
+                else:
+                    self._hook_queue.append(entry)
+        return processed
+
+    def register_workflow(self, yaml_content: str) -> WorkflowVersion:
+        wf = parse_and_validate(yaml_content)
+        content_hash = compute_content_hash(wf)
+        key = (wf.name, wf.version)
+
+        if key in self._workflows:
+            existing_hash = self._workflow_hashes.get(key)
+            if existing_hash is not None and existing_hash != content_hash:
+                raise SubstrateError(
+                    ErrorCode.WORKFLOW_VERSION_CONFLICT,
+                    f"Workflow {wf.name!r} v{wf.version} already registered with different content",
+                )
+            return WorkflowVersion(
+                name=key[0],
+                version=key[1],
+                substrate_version=(
+                    self._workflow_defs[key].substrate_version
+                ),
+                registered_at=self._workflow_registered_at[key],
+            )
+
+        from ._workflow import parse_workflow_yaml
+        raw_dict = parse_workflow_yaml(yaml_content)
+
+        now = datetime.now(UTC)
+        self._workflows[key] = raw_dict
+        self._workflow_defs[key] = wf
+        self._workflow_hashes[key] = content_hash
+        self._workflow_registered_at[key] = now
+
+        return WorkflowVersion(
+            name=wf.name,
+            version=wf.version,
+            substrate_version=wf.substrate_version,
+            registered_at=now,
+        )
+
+    def register_workflow_file(self, path: str | Path) -> WorkflowVersion:
+        return self.register_workflow(Path(path).read_text())
+
+    def create_work_item(
+        self,
+        workflow_name: str,
+        work_item_type: str,
+        actor_id: str,
+        actor_kind: str = "agent",
+        actor_metadata: dict | None = None,
+        *,
+        custom_fields: dict | None = None,
+        not_before: datetime | None = None,
+        event_id: uuid.UUID | None = None,
+    ) -> tuple[WorkItem, Event]:
+        _validate_actor_kind(actor_kind)
+        if event_id is None:
+            event_id = uuid.uuid4()
+
+        wf_data, wf, version = self._resolve_wf_def(workflow_name)
+
+        wit_def = None
+        for wt in wf.work_item_types:
+            if wt.name == work_item_type:
+                wit_def = wt
+                break
+        if wit_def is None:
+            raise SubstrateError(
+                ErrorCode.WORK_ITEM_TYPE_NOT_DECLARED,
+                f"Work-item type {work_item_type!r} not declared in workflow {workflow_name!r}",
+            )
+
+        validated_fields = validate_field_values(wf, work_item_type, custom_fields or {})
+        self._validate_refs_in_memory(wf_data, work_item_type, validated_fields)
+
+        work_item_id = uuid.uuid4()
+        initial_state = wf.initial_state
+        now = datetime.now(UTC)
+
+        wi_state = {
+            "work_item_id": work_item_id,
+            "workflow_name": workflow_name,
+            "workflow_version": version,
+            "work_item_type": work_item_type,
+            "current_state": initial_state,
+            "custom_fields": validated_fields,
+            "needs_review": False,
+            "not_before": not_before,
+            "last_event_seq": 0,
+            "last_event_at": now,
+            "next_event_seq": 1,
+            "claimed_by": None,
+            "claim_expires_at": None,
+        }
+        self._work_items[work_item_id] = wi_state
+
+        evt = _make_event(
+            event_id=event_id,
+            work_item_id=work_item_id,
+            event_seq=0,
+            actor_id=actor_id,
+            actor_kind=actor_kind,
+            actor_metadata=actor_metadata,
+            workflow_name=workflow_name,
+            workflow_version=version,
+            transition="created",
+            payload={
+                "work_item_type": work_item_type,
+                "initial_state": initial_state,
+                "custom_fields": validated_fields,
+                "not_before": not_before.isoformat() if not_before else None,
+            },
+            timestamp=now,
+        )
+        self._events.setdefault(work_item_id, []).append(evt)
+        self._event_id_index[event_id] = evt
+
+        return self._wi_to_work_item(wi_state), evt
+
+    def append_event(
+        self,
+        work_item_id: uuid.UUID,
+        actor_id: str,
+        actor_kind: str = "agent",
+        actor_metadata: dict | None = None,
+        *,
+        transition: str | None = None,
+        payload: dict | None = None,
+        event_id: uuid.UUID | None = None,
+        expected_event_seq: int | None = None,
+    ) -> Event:
+        _validate_actor_kind(actor_kind)
+        if event_id is None:
+            event_id = uuid.uuid4()
+
+        wi = self._work_items.get(work_item_id)
+        if wi is None:
+            raise SubstrateError(
+                ErrorCode.WORK_ITEM_NOT_FOUND,
+                f"Work item {work_item_id} not found",
+            )
+
+        if transition is not None:
+            wf_data = self._workflows.get((wi["workflow_name"], wi["workflow_version"]))
+            if wf_data is not None:
+                for t in wf_data.get("transitions", []):
+                    if t["name"] == transition:
+                        raise SubstrateError(
+                            ErrorCode.TRANSITION_VIA_APPEND_BLOCKED,
+                            f"Transition {transition!r} is defined in workflow "
+                            f"{wi['workflow_name']!r}. Use Substrate.transition() instead.",
+                        )
+
+        existing = self._event_id_index.get(event_id)
+        if existing is not None:
+            if existing.actor_id != actor_id:
+                raise SubstrateError(
+                    ErrorCode.IDEMPOTENCY_COLLISION_WITH_DIFFERENT_PAYLOAD,
+                    f"event_id {event_id} already used by actor {existing.actor_id!r}",
+                )
+            if existing.transition != transition:
+                raise SubstrateError(
+                    ErrorCode.IDEMPOTENCY_COLLISION_WITH_DIFFERENT_PAYLOAD,
+                    f"event_id {event_id} already used with transition {existing.transition!r}",
+                )
+            return existing
+
+        next_seq = wi["next_event_seq"]
+        if expected_event_seq is not None and next_seq != expected_event_seq:
+            raise SubstrateError(
+                ErrorCode.CONCURRENT_MODIFICATION,
+                f"Expected event_seq {expected_event_seq}, but current next is {next_seq}",
+            )
+
+        now = datetime.now(UTC)
+        evt = _make_event(
+            event_id=event_id,
+            work_item_id=work_item_id,
+            event_seq=next_seq,
+            actor_id=actor_id,
+            actor_kind=actor_kind,
+            actor_metadata=actor_metadata,
+            workflow_name=wi["workflow_name"],
+            workflow_version=wi["workflow_version"],
+            transition=transition,
+            payload=payload,
+            timestamp=now,
+        )
+        self._events.setdefault(work_item_id, []).append(evt)
+        self._event_id_index[event_id] = evt
+
+        wi["last_event_seq"] = next_seq
+        wi["last_event_at"] = now
+        wi["next_event_seq"] = next_seq + 1
+
+        return evt
+
+    def transition(
+        self,
+        work_item_id: uuid.UUID,
+        transition_name: str,
+        actor_id: str,
+        actor_kind: str = "agent",
+        actor_metadata: dict | None = None,
+        *,
+        payload: dict | None = None,
+        custom_fields: dict | None = None,
+        event_id: uuid.UUID | None = None,
+        expected_event_seq: int | None = None,
+    ) -> Event:
+        _validate_actor_kind(actor_kind)
+        if event_id is None:
+            event_id = uuid.uuid4()
+
+        wi = self._work_items.get(work_item_id)
+        if wi is None:
+            raise SubstrateError(
+                ErrorCode.WORK_ITEM_NOT_FOUND,
+                f"Work item {work_item_id} not found",
+            )
+
+        wf_key = (wi["workflow_name"], wi["workflow_version"])
+        wf_data = self._workflows.get(wf_key)
+        if wf_data is None:
+            raise SubstrateError(
+                ErrorCode.WORKFLOW_NOT_REGISTERED,
+                f"Workflow {wi['workflow_name']!r} v{wi['workflow_version']} not found",
+            )
+
+        transition_def = None
+        for t in wf_data.get("transitions", []):
+            if t["name"] == transition_name and t["from"] == wi["current_state"]:
+                transition_def = t
+                break
+
+        if transition_def is None:
+            raise SubstrateError(
+                ErrorCode.INVALID_TRANSITION,
+                f"Transition {transition_name!r} not valid from state "
+                f"{wi['current_state']!r} in {wi['workflow_name']!r} "
+                f"v{wi['workflow_version']}",
+            )
+
+        if transition_def.get("allowed_roles"):
+            role = (actor_metadata or {}).get("role")
+            if role not in transition_def["allowed_roles"]:
+                raise SubstrateError(
+                    ErrorCode.ROLE_NOT_PERMITTED,
+                    f"Role {role!r} not permitted for transition {transition_name!r}",
+                )
+            self._check_actor_role_authorized(actor_id, role)
+
+        if custom_fields:
+            validate_field_update(wf_data, wi["work_item_type"], custom_fields)
+            self._validate_refs_in_memory(wf_data, wi["work_item_type"], custom_fields)
+
+        new_state = transition_def["to"]
+
+        validator_name = transition_def.get("validator")
+        if validator_name:
+            handler = self._validators.get(validator_name)
+            if handler is not None:
+                from ._hooks import run_validator
+
+                ctx = ValidatorContext(
+                    work_item_id=work_item_id,
+                    workflow_name=wi["workflow_name"],
+                    workflow_version=wi["workflow_version"],
+                    work_item_type=wi["work_item_type"],
+                    current_state=wi["current_state"],
+                    new_state=new_state,
+                    transition_name=transition_name,
+                    payload=payload,
+                    custom_fields=wi["custom_fields"] or {},
+                    actor_id=actor_id,
+                    actor_metadata=actor_metadata,
+                )
+                run_validator(validator_name, handler, ctx)
+
+        existing = self._event_id_index.get(event_id)
+        if existing is not None:
+            if existing.actor_id != actor_id or existing.transition != transition_name:
+                raise SubstrateError(
+                    ErrorCode.IDEMPOTENCY_COLLISION_WITH_DIFFERENT_PAYLOAD,
+                    f"event_id {event_id} already used",
+                )
+            return existing
+
+        next_seq = wi["next_event_seq"]
+        if expected_event_seq is not None and next_seq != expected_event_seq:
+            raise SubstrateError(
+                ErrorCode.CONCURRENT_MODIFICATION,
+                f"Expected event_seq {expected_event_seq}, but current next is {next_seq}",
+            )
+
+        stored_payload = dict(payload) if payload else {}
+        if custom_fields:
+            stored_payload["custom_fields_update"] = custom_fields
+            merged = wi.get("custom_fields") or {}
+            wi["custom_fields"] = {**merged, **custom_fields}
+
+        now = datetime.now(UTC)
+        evt = _make_event(
+            event_id=event_id,
+            work_item_id=work_item_id,
+            event_seq=next_seq,
+            actor_id=actor_id,
+            actor_kind=actor_kind,
+            actor_metadata=actor_metadata,
+            workflow_name=wi["workflow_name"],
+            workflow_version=wi["workflow_version"],
+            transition=transition_name,
+            payload=stored_payload,
+            timestamp=now,
+        )
+        self._events.setdefault(work_item_id, []).append(evt)
+        self._event_id_index[event_id] = evt
+
+        wi["current_state"] = new_state
+        wi["last_event_seq"] = next_seq
+        wi["last_event_at"] = now
+        wi["next_event_seq"] = next_seq + 1
+        wi["claimed_by"] = None
+        wi["claim_expires_at"] = None
+        self._claims.pop(work_item_id, None)
+
+        hook_names = transition_def.get("hooks", [])
+        if hook_names:
+            hook_defaults = wf_data.get("hook_defaults") or {}
+            max_retries = hook_defaults.get("max_retries", 3)
+            for hn in hook_names:
+                self._hook_queue.append({
+                    "id": len(self._hook_queue) + 1,
+                    "event_id": event_id,
+                    "work_item_id": work_item_id,
+                    "hook_name": hn,
+                    "hook_type": "transition",
+                    "transition": transition_name,
+                    "payload": payload,
+                    "retry_count": 0,
+                    "max_retries": max_retries,
+                })
+
+        return evt
+
+    def read_events(
+        self,
+        *,
+        work_item_id: uuid.UUID | None = None,
+        actor_id: str | None = None,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        transition: str | None = None,
+        limit: int = 100,
+        before_seq: int | None = None,
+    ) -> list[Event]:
+        if before_seq is not None and work_item_id is None:
+            raise SubstrateError(
+                ErrorCode.INVALID_FILTER, "before_seq requires work_item_id",
+            )
+        if (start is None) != (end is None):
+            raise SubstrateError(
+                ErrorCode.INVALID_FILTER, "start and end must be provided together",
+            )
+
+        if work_item_id is not None:
+            evts = list(self._events.get(work_item_id, []))
+            if before_seq is not None:
+                evts = [e for e in evts if e.event_seq < before_seq]
+            evts = sorted(evts, key=lambda e: e.event_seq)
+            return evts[-limit:] if len(evts) > limit else evts
+        if actor_id is not None:
+            result = []
+            for evts in self._events.values():
+                for e in evts:
+                    if e.actor_id == actor_id:
+                        result.append(e)
+            result.sort(key=lambda e: (e.timestamp, e.event_seq), reverse=True)
+            return result[:limit]
+        if start is not None and end is not None:
+            result = []
+            for evts in self._events.values():
+                for e in evts:
+                    if start <= e.timestamp <= end:
+                        result.append(e)
+            result.sort(key=lambda e: (e.timestamp, e.event_seq))
+            return result[:limit]
+        if transition is not None:
+            result = []
+            for evts in self._events.values():
+                for e in evts:
+                    if e.transition == transition:
+                        result.append(e)
+            result.sort(key=lambda e: (e.timestamp, e.event_seq), reverse=True)
+            return result[:limit]
+        return []
+
+    def read_events_since(
+        self,
+        work_item_id: uuid.UUID,
+        after_seq: int,
+        *,
+        limit: int = 100,
+    ) -> list[Event]:
+        evts = self._events.get(work_item_id, [])
+        result = [e for e in evts if e.event_seq > after_seq]
+        result.sort(key=lambda e: e.event_seq)
+        return result[:limit]
+
+    def query_work_items(
+        self,
+        *,
+        workflow_name: str | None = None,
+        workflow_version: int | None = None,
+        work_item_types: list[str] | None = None,
+        current_states: list[str] | None = None,
+        claimed_by: str | None = None,
+        claimable_now: bool | None = None,
+        needs_review: bool | None = None,
+        has_link_type: str | None = None,
+        cursor: uuid.UUID | None = None,
+        page_size: int = 100,
+    ) -> QueryPage[WorkItem]:
+        page_size = min(max(1, page_size), 1000)
+        items = list(self._work_items.values())
+
+        if cursor is not None:
+            items = [wi for wi in items if wi["work_item_id"] > cursor]
+        if workflow_name is not None:
+            items = [wi for wi in items if wi["workflow_name"] == workflow_name]
+        if workflow_version is not None:
+            items = [wi for wi in items if wi["workflow_version"] == workflow_version]
+        if work_item_types:
+            items = [wi for wi in items if wi["work_item_type"] in work_item_types]
+        if current_states:
+            items = [wi for wi in items if wi["current_state"] in current_states]
+        if claimed_by is not None:
+            items = [wi for wi in items if wi.get("claimed_by") == claimed_by]
+        if needs_review is not None:
+            items = [wi for wi in items if wi.get("needs_review") == needs_review]
+        if claimable_now is True:
+            now = datetime.now(UTC)
+            items = [
+                wi for wi in items
+                if (
+                    wi.get("claimed_by") is None
+                    or (wi.get("claim_expires_at") and wi["claim_expires_at"] < now)
+                )
+                and (wi.get("not_before") is None or wi["not_before"] <= now)
+            ]
+        if has_link_type is not None:
+            active = self._active_link_set(has_link_type)
+            items = [wi for wi in items if wi["work_item_id"] in active]
+
+        items.sort(key=lambda wi: wi["work_item_id"])
+        has_more = len(items) > page_size
+        page = items[:page_size]
+        next_cursor = page[-1]["work_item_id"] if has_more and page else None
+
+        return QueryPage(
+            items=[self._wi_to_work_item(wi) for wi in page],
+            cursor=next_cursor,
+            has_more=has_more,
+        )
+
+    def get_work_item(self, work_item_id: uuid.UUID) -> WorkItem | None:
+        wi = self._work_items.get(work_item_id)
+        if wi is None:
+            return None
+        return self._wi_to_work_item(wi)
+
+    def acquire_claim(
+        self,
+        work_item_id: uuid.UUID,
+        actor_id: str,
+        ttl_seconds: int = 300,
+        *,
+        event_id: uuid.UUID | None = None,
+    ) -> Claim:
+        wi = self._work_items.get(work_item_id)
+        if wi is None:
+            raise SubstrateError(
+                ErrorCode.WORK_ITEM_NOT_FOUND,
+                f"Work item {work_item_id} not found",
+            )
+
+        now = datetime.now(UTC)
+        if wi.get("not_before") is not None and wi["not_before"] > now:
+            raise SubstrateError(
+                ErrorCode.NOT_BEFORE_FUTURE,
+                f"Work item not_before is {wi['not_before'].isoformat()}, cannot claim yet",
+            )
+
+        existing = self._claims.get(work_item_id)
+        if existing is not None and existing["expires_at"] >= now:
+            if existing["actor_id"] == actor_id:
+                new_expires = now + timedelta(seconds=ttl_seconds)
+                existing["expires_at"] = new_expires
+                wi["claim_expires_at"] = new_expires
+                return Claim(
+                    work_item_id=work_item_id,
+                    actor_id=actor_id,
+                    acquired_at=existing["acquired_at"],
+                    expires_at=new_expires,
+                    attempt_number=existing["attempt_number"],
+                )
+            raise SubstrateError(
+                ErrorCode.CLAIM_CONTESTED,
+                f"Work item {work_item_id} is already claimed by {existing['actor_id']}",
+            )
+
+        prior_actor_id = None
+        attempt_number = 1
+        if existing is not None:
+            attempt_number = existing["attempt_number"] + 1
+            prior_actor_id = existing["actor_id"]
+
+        acquired_at = now
+        expires_at = acquired_at + timedelta(seconds=ttl_seconds)
+
+        claim_data = {
+            "actor_id": actor_id,
+            "acquired_at": acquired_at,
+            "expires_at": expires_at,
+            "attempt_number": attempt_number,
+        }
+        self._claims[work_item_id] = claim_data
+        wi["claimed_by"] = actor_id
+        wi["claim_expires_at"] = expires_at
+
+        eid = event_id or uuid.uuid4()
+        if prior_actor_id is not None:
+            self._append_claim_event(
+                wi, eid, "claim_stolen",
+                {
+                    "prior_actor_id": prior_actor_id,
+                    "new_actor_id": actor_id,
+                    "attempt_number": attempt_number,
+                },
+            )
+        else:
+            self._append_claim_event(
+                wi, eid, "claim_acquired",
+                {
+                    "actor_id": actor_id,
+                    "ttl_seconds": ttl_seconds,
+                    "attempt_number": attempt_number,
+                },
+            )
+
+        self._check_escalation(wi, attempt_number)
+
+        return Claim(
+            work_item_id=work_item_id,
+            actor_id=actor_id,
+            acquired_at=acquired_at,
+            expires_at=expires_at,
+            attempt_number=attempt_number,
+        )
+
+    def heartbeat_claim(
+        self,
+        work_item_id: uuid.UUID,
+        actor_id: str,
+        ttl_seconds: int = 300,
+        *,
+        expected_attempt_number: int | None = None,
+    ) -> Claim:
+        claim = self._claims.get(work_item_id)
+        if claim is None:
+            raise SubstrateError(
+                ErrorCode.CLAIM_NOT_FOUND,
+                f"No claim found for work item {work_item_id}",
+            )
+        if claim["actor_id"] != actor_id:
+            raise SubstrateError(
+                ErrorCode.CLAIM_LOST,
+                f"Claim on {work_item_id} is now held by {claim['actor_id']}, not {actor_id}",
+            )
+        if (
+            expected_attempt_number is not None
+            and claim["attempt_number"] != expected_attempt_number
+        ):
+            raise SubstrateError(
+                ErrorCode.CLAIM_LOST,
+                f"Claim attempt_number is {claim['attempt_number']}, "
+                f"expected {expected_attempt_number}",
+            )
+
+        new_expires = datetime.now(UTC) + timedelta(seconds=ttl_seconds)
+        claim["expires_at"] = new_expires
+        wi = self._work_items.get(work_item_id)
+        if wi is not None:
+            wi["claim_expires_at"] = new_expires
+
+        return Claim(
+            work_item_id=work_item_id,
+            actor_id=actor_id,
+            acquired_at=claim["acquired_at"],
+            expires_at=new_expires,
+            attempt_number=claim["attempt_number"],
+        )
+
+    def release_claim(
+        self,
+        work_item_id: uuid.UUID,
+        actor_id: str,
+        *,
+        event_id: uuid.UUID | None = None,
+    ) -> None:
+        claim = self._claims.get(work_item_id)
+        if claim is None:
+            raise SubstrateError(
+                ErrorCode.CLAIM_NOT_FOUND,
+                f"No claim found for work item {work_item_id}",
+            )
+        if claim["actor_id"] != actor_id:
+            raise SubstrateError(
+                ErrorCode.CLAIM_LOST,
+                f"Claim on {work_item_id} is held by {claim['actor_id']}, not {actor_id}",
+            )
+
+        del self._claims[work_item_id]
+        wi = self._work_items.get(work_item_id)
+        if wi is not None:
+            wi["claimed_by"] = None
+            wi["claim_expires_at"] = None
+            self._append_claim_event(
+                wi, event_id or uuid.uuid4(), "claim_released",
+                {"actor_id": actor_id},
+            )
+
+    def sweep_expired_claims(self) -> int:
+        now = datetime.now(UTC)
+        expired = [
+            (wid, c) for wid, c in list(self._claims.items())
+            if c["expires_at"] < now
+        ]
+        for wid, claim in expired:
+            del self._claims[wid]
+            wi = self._work_items.get(wid)
+            if wi is not None:
+                wi["claimed_by"] = None
+                wi["claim_expires_at"] = None
+                self._append_claim_event(
+                    wi, uuid.uuid4(), "claim_expired",
+                    {"actor_id": claim["actor_id"], "expired_at": now.isoformat()},
+                )
+        return len(expired)
+
+    def create_link(
+        self,
+        from_work_item_id: uuid.UUID,
+        to_work_item_id: uuid.UUID,
+        link_type: str,
+        actor_id: str,
+        actor_kind: str = "agent",
+        actor_metadata: dict | None = None,
+        *,
+        event_id: uuid.UUID | None = None,
+        payload: dict | None = None,
+    ) -> Link:
+        _validate_actor_kind(actor_kind)
+        if event_id is None:
+            event_id = uuid.uuid4()
+
+        from_wi = self._work_items.get(from_work_item_id)
+        to_wi = self._work_items.get(to_work_item_id)
+        if from_wi is None or to_wi is None:
+            raise SubstrateError(
+                ErrorCode.LINK_TARGET_NOT_FOUND,
+                "One or both work items not found for link",
+            )
+        if from_wi["workflow_name"] != to_wi["workflow_name"]:
+            raise SubstrateError(
+                ErrorCode.LINK_CROSS_PROJECT,
+                "Cannot link work items from different projects",
+            )
+
+        wf_data = self._workflows.get((from_wi["workflow_name"], from_wi["workflow_version"]))
+        if wf_data is not None:
+            allowed = False
+            for lt in wf_data.get("link_types", []):
+                if (
+                    lt["name"] == link_type
+                    and lt["source_type"] == from_wi["work_item_type"]
+                    and lt["target_type"] == to_wi["work_item_type"]
+                ):
+                    allowed = True
+                    break
+            if not allowed:
+                raise SubstrateError(
+                    ErrorCode.LINK_TYPE_NOT_ALLOWED,
+                    f"Link type {link_type!r} not allowed between "
+                    f"{from_wi['work_item_type']!r} and {to_wi['work_item_type']!r}",
+                )
+
+        link_id = uuid.uuid4()
+        link_payload = {
+            "link_id": str(link_id),
+            "from_work_item_id": str(from_work_item_id),
+            "to_work_item_id": str(to_work_item_id),
+            "link_type": link_type,
+        }
+        if payload:
+            link_payload["link_payload"] = payload
+
+        self._append_simple_event(
+            from_wi, event_id, actor_id, actor_kind, actor_metadata,
+            "link_created", link_payload,
+        )
+
+        self._links.append({
+            "link_id": link_id,
+            "from_id": from_work_item_id,
+            "to_id": to_work_item_id,
+            "link_type": link_type,
+            "payload": payload,
+        })
+
+        return Link(
+            link_id=link_id,
+            from_work_item_id=from_work_item_id,
+            to_work_item_id=to_work_item_id,
+            link_type=link_type,
+            payload=payload,
+        )
+
+    def remove_link(
+        self,
+        from_work_item_id: uuid.UUID,
+        to_work_item_id: uuid.UUID,
+        link_type: str,
+        actor_id: str,
+        actor_kind: str = "agent",
+        actor_metadata: dict | None = None,
+        *,
+        event_id: uuid.UUID | None = None,
+    ) -> None:
+        _validate_actor_kind(actor_kind)
+        if event_id is None:
+            event_id = uuid.uuid4()
+
+        from_wi = self._work_items.get(from_work_item_id)
+        to_wi = self._work_items.get(to_work_item_id)
+        if from_wi is None or to_wi is None:
+            raise SubstrateError(
+                ErrorCode.LINK_TARGET_NOT_FOUND,
+                "One or both work items not found for link removal",
+            )
+
+        has_live = any(
+            ln["from_id"] == from_work_item_id
+            and ln["to_id"] == to_work_item_id
+            and ln["link_type"] == link_type
+            and ln.get("active", True)
+            for ln in self._links
+        )
+        if not has_live:
+            events = self._events.get(from_work_item_id, [])
+            has_created = any(
+                e.transition == "link_created"
+                and (e.payload or {}).get("to_work_item_id") == str(to_work_item_id)
+                and (e.payload or {}).get("link_type") == link_type
+                for e in events
+            )
+            has_removed = any(
+                e.transition == "link_removed"
+                and (e.payload or {}).get("to_work_item_id") == str(to_work_item_id)
+                and (e.payload or {}).get("link_type") == link_type
+                for e in events
+            )
+            if not has_created or has_removed:
+                raise SubstrateError(
+                    ErrorCode.LINK_NOT_FOUND,
+                    f"No live link of type {link_type!r} "
+                    f"from {from_work_item_id} to {to_work_item_id}",
+                )
+
+        self._append_simple_event(
+            from_wi, event_id, actor_id, actor_kind, actor_metadata,
+            "link_removed",
+            {
+                "from_work_item_id": str(from_work_item_id),
+                "to_work_item_id": str(to_work_item_id),
+                "link_type": link_type,
+            },
+        )
+
+        self._links = [
+            ln for ln in self._links
+            if not (
+                ln["from_id"] == from_work_item_id
+                and ln["to_id"] == to_work_item_id
+                and ln["link_type"] == link_type
+            )
+        ]
+
+    def replay(self, *, continue_on_revoked: bool = False) -> ReplayReport:
+        ok = 0
+        drift = 0
+        halted = 0
+        warnings = 0
+        for wi_id, wi in self._work_items.items():
+            evts = self._events.get(wi_id, [])
+            if not evts:
+                continue
+            derived_state = None
+            derived_fields: dict = {}
+            for evt in sorted(evts, key=lambda e: e.event_seq):
+                if evt.transition == "created":
+                    p = evt.payload or {}
+                    derived_state = p.get("initial_state")
+                    derived_fields = p.get("custom_fields", {})
+                elif evt.transition in ("claim_acquired", "claim_released", "claim_expired",
+                                        "claim_stolen", "escalated", "not_before_set",
+                                        "link_created", "link_removed"):
+                    pass
+                else:
+                    wf_data = self._workflows.get((wi["workflow_name"], wi["workflow_version"]))
+                    if wf_data:
+                        for t in wf_data.get("transitions", []):
+                            if t["name"] == evt.transition:
+                                derived_state = t["to"]
+                                break
+                        p = evt.payload or {}
+                        if "custom_fields_update" in p:
+                            derived_fields = {**derived_fields, **p["custom_fields_update"]}
+
+            if derived_state is not None:
+                if (
+                    derived_state != wi["current_state"]
+                    or derived_fields != (wi["custom_fields"] or {})
+                ):
+                    drift += 1
+                else:
+                    ok += 1
+
+        return ReplayReport(
+            table_name="in_memory_replay",
+            replayed_ok=ok,
+            replayed_drift=drift,
+            halted=halted,
+            warnings=warnings,
+        )
+
+    def requeue_dead_lettered_hook(self, dead_letter_id: int) -> None:
+        entry = self._dead_letter.pop(dead_letter_id, None)
+        if entry is None:
+            raise SubstrateError(
+                ErrorCode.HOOK_NOT_FOUND,
+                f"Dead letter entry {dead_letter_id} not found",
+            )
+        self._hook_queue.append({
+            "id": entry["original_hook_queue_id"] or len(self._hook_queue) + 1,
+            "event_id": entry["event_id"],
+            "work_item_id": None,
+            "hook_name": entry["hook_name"],
+            "hook_type": entry["hook_type"],
+            "transition": None,
+            "payload": entry.get("payload"),
+            "retry_count": 0,
+            "max_retries": 3,
+        })
+
+    def list_dead_lettered_hooks(self) -> list[DeadLetterEntry]:
+        return [
+            DeadLetterEntry(
+                id=e["id"],
+                event_id=e["event_id"],
+                hook_name=e["hook_name"],
+                hook_type=e["hook_type"],
+                payload=e.get("payload"),
+                retry_count=e["retry_count"],
+                error_message=e.get("error_message"),
+                dead_lettered_at=e["dead_lettered_at"],
+                original_hook_queue_id=e.get("original_hook_queue_id"),
+            )
+            for e in sorted(
+                self._dead_letter.values(),
+                key=lambda x: x["dead_lettered_at"],
+                reverse=True,
+            )
+        ]
+
+    def update_not_before(
+        self,
+        work_item_id: uuid.UUID,
+        not_before: datetime | None,
+        actor_id: str,
+        actor_kind: str = "agent",
+        actor_metadata: dict | None = None,
+        *,
+        event_id: uuid.UUID | None = None,
+    ) -> Event:
+        _validate_actor_kind(actor_kind)
+        if event_id is None:
+            event_id = uuid.uuid4()
+
+        wi = self._work_items.get(work_item_id)
+        if wi is None:
+            raise SubstrateError(
+                ErrorCode.WORK_ITEM_NOT_FOUND,
+                f"Work item {work_item_id} not found",
+            )
+
+        wi["not_before"] = not_before
+        now = datetime.now(UTC)
+        evt = _make_event(
+            event_id=event_id,
+            work_item_id=work_item_id,
+            event_seq=wi["next_event_seq"],
+            actor_id=actor_id,
+            actor_kind=actor_kind,
+            actor_metadata=actor_metadata,
+            workflow_name=wi["workflow_name"],
+            workflow_version=wi["workflow_version"],
+            transition="not_before_set",
+            payload={"not_before": not_before.isoformat() if not_before else None},
+            timestamp=now,
+        )
+        self._events.setdefault(work_item_id, []).append(evt)
+        self._event_id_index[event_id] = evt
+        wi["last_event_seq"] = wi["next_event_seq"]
+        wi["last_event_at"] = now
+        wi["next_event_seq"] += 1
+        return evt
+
+    def register_actor_role(self, actor_id: str, role: str) -> None:
+        key = (actor_id, role)
+        if key in self._actor_roles:
+            raise SubstrateError(
+                ErrorCode.ACTOR_ROLE_ALREADY_REGISTERED,
+                f"Role {role!r} already registered for actor {actor_id!r}",
+            )
+        self._actor_roles.add(key)
+        self._actor_role_created[key] = datetime.now(UTC)
+
+    def unregister_actor_role(self, actor_id: str, role: str) -> None:
+        key = (actor_id, role)
+        if key not in self._actor_roles:
+            raise SubstrateError(
+                ErrorCode.ACTOR_ROLE_NOT_REGISTERED,
+                f"Role {role!r} not registered for actor {actor_id!r}",
+            )
+        self._actor_roles.discard(key)
+        del self._actor_role_created[key]
+
+    def list_actor_roles(self, actor_id: str | None = None) -> list[ActorRole]:
+        result = []
+        for (aid, role), created_at in self._actor_role_created.items():
+            if actor_id is None or aid == actor_id:
+                result.append(ActorRole(actor_id=aid, role=role, created_at=created_at))
+        return sorted(result, key=lambda r: r.created_at)
+
+    @staticmethod
+    def validate_actor_metadata(
+        event: Event,
+        expected_schema: dict | None = None,
+    ) -> list[str]:
+        from ._lint import validate_actor_metadata as _validate
+        return _validate(event, expected_schema)
+
+    @staticmethod
+    def actor_metadata_complete(
+        events: list[Event],
+        expected_keys: list[str],
+    ) -> list[Event]:
+        from ._lint import actor_metadata_complete as _complete
+        return _complete(events, expected_keys)
+
+    def _resolve_workflow(self, workflow_name: str) -> tuple[dict, int]:
+        versions = [(k, v) for k, v in self._workflows.items() if k[0] == workflow_name]
+        if not versions:
+            raise SubstrateError(
+                ErrorCode.WORKFLOW_NOT_REGISTERED,
+                f"Workflow {workflow_name!r} is not registered",
+            )
+        versions.sort(key=lambda x: x[0][1], reverse=True)
+        key, data = versions[0]
+        return data, key[1]
+
+    def _resolve_wf_def(self, workflow_name: str) -> tuple[dict, WorkflowDefinition, int]:
+        versions = [(k, v) for k, v in self._workflows.items() if k[0] == workflow_name]
+        if not versions:
+            raise SubstrateError(
+                ErrorCode.WORKFLOW_NOT_REGISTERED,
+                f"Workflow {workflow_name!r} is not registered",
+            )
+        versions.sort(key=lambda x: x[0][1], reverse=True)
+        key, data = versions[0]
+        wf_def = self._workflow_defs[key]
+        return data, wf_def, key[1]
+
+    def _validate_refs_in_memory(self, wf_data: dict, work_item_type: str, values: dict) -> None:
+        wits = wf_data.get("work_item_types", [])
+        wit = next((t for t in wits if t["name"] == work_item_type), None)
+        if wit is None:
+            return
+        for field_def in wit.get("custom_fields", []):
+            if field_def["type"] != "work_item_ref":
+                continue
+            value = values.get(field_def["name"])
+            if value is None:
+                continue
+            ref_uuid = uuid.UUID(value)
+            target_type = field_def.get("target_work_item_type")
+            ref_wi = self._work_items.get(ref_uuid)
+            if ref_wi is None:
+                raise SubstrateError(
+                    ErrorCode.CUSTOM_FIELD_VIOLATION,
+                    f"Field {field_def['name']!r} references nonexistent work item {value}",
+                    detail={"field": field_def["name"], "value": value},
+                )
+            if target_type and ref_wi["work_item_type"] != target_type:
+                raise SubstrateError(
+                    ErrorCode.CUSTOM_FIELD_VIOLATION,
+                    f"Field {field_def['name']!r} references work item of type "
+                    f"{ref_wi['work_item_type']!r}, expected {target_type!r}",
+                    detail={
+                        "field": field_def["name"],
+                        "value": value,
+                        "actual_type": ref_wi["work_item_type"],
+                        "expected_type": target_type,
+                    },
+                )
+
+    def _check_actor_role_authorized(self, actor_id: str, role: str) -> None:
+        registered = {r for (aid, r) in self._actor_roles if aid == actor_id}
+        if registered and role not in registered:
+            raise SubstrateError(
+                ErrorCode.ACTOR_ROLE_NOT_AUTHORIZED,
+                f"Actor {actor_id!r} is not authorized for role {role!r}",
+            )
+
+    def _check_escalation(self, wi: dict, attempt_number: int) -> None:
+        wf_data = self._workflows.get((wi["workflow_name"], wi["workflow_version"]))
+        if wf_data is None:
+            return
+        threshold = wf_data.get("attempt_threshold")
+        if threshold is None or attempt_number < threshold:
+            return
+        existing = any(
+            e.transition == "escalated" and e.work_item_id == wi["work_item_id"]
+            for evts in self._events.values()
+            for e in evts
+        )
+        if existing:
+            return
+        wi["needs_review"] = True
+        self._append_claim_event(
+            wi, uuid.uuid4(), "system", "escalated",
+            {"attempt_number": attempt_number, "threshold": threshold},
+        )
+
+    def _append_claim_event(
+        self, wi: dict, event_id: uuid.UUID, transition: str, payload: dict,
+    ) -> None:
+        now = datetime.now(UTC)
+        evt = _make_event(
+            event_id=event_id,
+            work_item_id=wi["work_item_id"],
+            event_seq=wi["next_event_seq"],
+            actor_id="system",
+            actor_kind="system",
+            actor_metadata=None,
+            workflow_name=wi["workflow_name"],
+            workflow_version=wi["workflow_version"],
+            transition=transition,
+            payload=payload,
+            timestamp=now,
+        )
+        self._events.setdefault(wi["work_item_id"], []).append(evt)
+        self._event_id_index[event_id] = evt
+        wi["last_event_seq"] = wi["next_event_seq"]
+        wi["last_event_at"] = now
+        wi["next_event_seq"] += 1
+
+    def _append_simple_event(
+        self, wi: dict, event_id: uuid.UUID,
+        actor_id: str, actor_kind: str, actor_metadata: dict | None,
+        transition: str, payload: dict,
+    ) -> None:
+        now = datetime.now(UTC)
+        evt = _make_event(
+            event_id=event_id,
+            work_item_id=wi["work_item_id"],
+            event_seq=wi["next_event_seq"],
+            actor_id=actor_id,
+            actor_kind=actor_kind,
+            actor_metadata=actor_metadata,
+            workflow_name=wi["workflow_name"],
+            workflow_version=wi["workflow_version"],
+            transition=transition,
+            payload=payload,
+            timestamp=now,
+        )
+        self._events.setdefault(wi["work_item_id"], []).append(evt)
+        self._event_id_index[event_id] = evt
+        wi["last_event_seq"] = wi["next_event_seq"]
+        wi["last_event_at"] = now
+        wi["next_event_seq"] += 1
+
+    def _active_link_set(self, link_type: str) -> set[uuid.UUID]:
+        result = set()
+        for ln in self._links:
+            if ln["link_type"] == link_type:
+                result.add(ln["from_id"])
+        return result
+
+    @staticmethod
+    def _wi_to_work_item(wi: dict) -> WorkItem:
+        return WorkItem(
+            work_item_id=wi["work_item_id"],
+            workflow_name=wi["workflow_name"],
+            workflow_version=wi["workflow_version"],
+            work_item_type=wi["work_item_type"],
+            current_state=wi["current_state"],
+            custom_fields=wi["custom_fields"] or {},
+            needs_review=wi.get("needs_review", False),
+            not_before=wi.get("not_before"),
+            last_event_seq=wi["last_event_seq"],
+            last_event_at=wi["last_event_at"],
+            next_event_seq=wi["next_event_seq"],
+            claimed_by=wi.get("claimed_by"),
+            claim_expires_at=wi.get("claim_expires_at"),
+        )

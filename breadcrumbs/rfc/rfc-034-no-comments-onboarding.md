@@ -4,7 +4,7 @@
 number: "034"
 title: '"No comments in code" style rule — onboarding trade-off'
 severity: low
-status: proposed
+status: implemented
 kind: design
 author: perplexity-review
 related: []

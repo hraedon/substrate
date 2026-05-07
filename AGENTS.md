@@ -131,6 +131,10 @@ sub.list_actor_roles(actor_id=None)                  # list registered roles
 3. **Hybrid persistence.** Events authoritative; projection updated in same transaction. Not pure event-sourcing (no per-read replay cost).
 4. **Signing is internal.** RFC 8785 canonicalization + HMAC-SHA256 computed inside the library. Callers submit unsigned field tuples.
 
+## Known constraints
+
+- **Schema-per-project requires session-scoped `search_path`.** Substrate uses `SET LOCAL search_path` per transaction. This is incompatible with connection-pooling middleware that dispatches transactions across different backends (e.g., PgBouncer in transaction mode). Use PgBouncer in session mode, or connect directly to Postgres. Medium-term migration path: fully-qualified table names (BC-033).
+
 ## Status
 
 MVP + Phase 2 + Phase 3 implemented. Production readiness sweep complete. All FRs FR-01 through FR-27 are in tree. 154 tests + 3 scale benchmarks passing across 17 files. All breadcrumbs resolved.
@@ -142,7 +146,7 @@ Phase 3 additions: FR-24 (actor → allowed_roles enforcement, closes BR-09), FR
 ## Conventions
 
 - Python 3.11+, `from __future__ import annotations` in all files
-- No comments in code (style rule)
+- No comments in code (style rule). Rationale: `spec.md` and `AGENTS.md` are the canonical reference for behavior and intent. Code is expected to be self-explanatory through naming and structure. Comments drift as the spec evolves. Instead of comments, extract well-named helper functions, add test cases, or update the spec. Inline spec cross-references (e.g., `# AC-28`) are acceptable on non-obvious invariants.
 - Frozen dataclasses for all domain types
 - `dict_row` factory on all psycopg connections
 - All mutations go through `mgr.transaction()` which sets `SET LOCAL search_path`
@@ -181,6 +185,8 @@ System-wide skills (`/reflect`, `/end`) provide portable equivalents; the substr
 ### Telemetry via hooks
 
 Substrate's `actor_metadata` is JSONB — free-form structured metadata for downstream consumers. To produce indexed aggregates (e.g., per-role pass rates), register a hook handler on the relevant event types that writes denormalized rows to a consumer-maintained reporting table. The reporting table lives outside substrate's schema; substrate's contract is the authoritative event log, and the reporting table is a derived view that can be rebuilt by replaying events through the same handler.
+
+A complete, runnable minimal example is in `examples/telemetry_via_hooks.py`.
 
 Recommended shape:
 

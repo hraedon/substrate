@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import uuid
 from pathlib import Path
 
 import jsonschema
@@ -285,6 +286,59 @@ def validate_field_update(
         _coerce_field(fd, value)
 
 
+def validate_work_item_refs(
+    conn,
+    wf_def: dict,
+    work_item_type: str,
+    values: dict,
+) -> None:
+    from psycopg.sql import SQL
+
+    wits = wf_def.get("work_item_types", [])
+    wit = next((t for t in wits if t["name"] == work_item_type), None)
+    if wit is None:
+        return
+
+    ref_fields = [
+        f
+        for f in wit.get("custom_fields", [])
+        if f["type"] == "work_item_ref"
+    ]
+
+    for field_def in ref_fields:
+        value = values.get(field_def["name"])
+        if value is None:
+            continue
+
+        ref_uuid = uuid.UUID(value)
+        target_type = field_def.get("target_work_item_type")
+
+        row = conn.execute(
+            SQL("SELECT work_item_type FROM work_items_current WHERE work_item_id = %s"),
+            [ref_uuid],
+        ).fetchone()
+
+        if row is None:
+            raise SubstrateError(
+                ErrorCode.CUSTOM_FIELD_VIOLATION,
+                f"Field {field_def['name']!r} references nonexistent work item {value}",
+                detail={"field": field_def["name"], "value": value},
+            )
+
+        if target_type and row["work_item_type"] != target_type:
+            raise SubstrateError(
+                ErrorCode.CUSTOM_FIELD_VIOLATION,
+                f"Field {field_def['name']!r} references work item of type "
+                f"{row['work_item_type']!r}, expected {target_type!r}",
+                detail={
+                    "field": field_def["name"],
+                    "value": value,
+                    "actual_type": row["work_item_type"],
+                    "expected_type": target_type,
+                },
+            )
+
+
 def _coerce_field(field_def: CustomFieldDef, value: object) -> object:
     ftype = field_def.type
     if ftype == "string":
@@ -335,6 +389,14 @@ def _coerce_field(field_def: CustomFieldDef, value: object) -> object:
                 ErrorCode.CUSTOM_FIELD_VIOLATION,
                 f"Field {field_def.name!r} expects work_item_id (UUID string)",
                 detail={"field": field_def.name},
+            )
+        try:
+            uuid.UUID(value)
+        except ValueError:
+            raise SubstrateError(
+                ErrorCode.CUSTOM_FIELD_VIOLATION,
+                f"Field {field_def.name!r} contains invalid UUID: {value!r}",
+                detail={"field": field_def.name, "value": value},
             )
     return value
 
