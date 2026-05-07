@@ -2,7 +2,7 @@
 number: "049"
 title: check_actor_role_authorized silently allows actors with zero registered roles
 severity: low
-status: proposed
+status: resolved
 kind: design
 author: glm-5.1
 date: "2026-05-07"
@@ -17,3 +17,7 @@ related: []
 ## Proposed
 
 Document this behavior explicitly in the method's docstring and/or the spec. Consider adding an optional `strict=True` mode that rejects actors with zero registered roles.
+
+## Resolution
+
+Added docstrings to both `check_actor_role_authorized` (`_actor_roles.py`) and `_check_actor_role_authorized` (`_in_memory.py`) documenting the FR-24 zero-roles bypass: enforcement only applies to actors with at least one registered role. No `strict` mode added — consumers requiring strict enforcement should pre-register all actors.

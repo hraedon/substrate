@@ -9,12 +9,12 @@ import pytest
 from substrate._errors import ErrorCode, SubstrateError
 from substrate._testing import (
     KeySet,
-    drop_project_schema,
     raw_transaction,
     replay_fn,
     sign_event,
     verify_event,
 )
+from substrate.testing import drop_project_schema
 
 TESTS_DIR = Path(__file__).parent
 DSN = "postgresql://substrate_test:substrate_test@localhost:5432/substrate_test"

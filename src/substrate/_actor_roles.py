@@ -72,6 +72,14 @@ def check_actor_role_authorized(
     actor_id: str,
     claimed_role: str,
 ) -> None:
+    """Verify that *actor_id* is authorized for *claimed_role*.
+
+    Per FR-24, enforcement only applies to actors with at least one
+    registered role.  If the actor has **zero** entries in
+    ``actor_roles``, the check passes silently — the actor is assumed
+    to be outside the RBAC surface and is trusted based on the
+    workflow's ``allowed_roles`` check alone.
+    """
     rows = conn.execute(
         SQL(
             "SELECT role FROM actor_roles WHERE actor_id = %s"

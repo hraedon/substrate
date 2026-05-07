@@ -2,7 +2,7 @@
 number: "045"
 title: InMemorySubstrate accepts but silently ignores hmac_key_path
 severity: medium
-status: proposed
+status: resolved
 kind: design
 author: assistant
 date: "2026-05-07"
@@ -21,3 +21,7 @@ The `None`-contract inconsistency was fixed in session 14 (parameter is now `str
 Option A: Optionally validate that `hmac_key_path` exists (if non-empty) and load it, then use the loaded key for dummy signing. This keeps API parity and catches drift early.
 
 Option B: Leave as-is, but document the limitation clearly in `AGENTS.md` under the `InMemorySubstrate` section.
+
+## Resolution
+
+Implemented Option A. When `hmac_key_path` is non-empty, `InMemorySubstrate` now loads a `KeySet` and uses real HMAC-SHA256 signing via `_signing.sign_event`. When `hmac_key_path` is empty (default), dummy signing is used as before. This catches configuration drift early while preserving test convenience.

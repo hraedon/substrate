@@ -89,6 +89,16 @@ def poll_and_process_hooks(
     metrics: Metrics | None,
     project: str,
 ) -> int:
+    """Reset stuck hooks, then process pending ones.
+
+    **Stuck-hook recovery (BC-047):** entries older than 5 minutes in
+    ``in_progress`` are reset to ``pending`` and re-dispatched.  If a
+    handler is genuinely still running (slow, not stuck) it may execute
+    twice.  The nested savepoint in the dispatch loop prevents
+    corruption, but the handler's external side effects are the
+    consumer's responsibility to make idempotent.  A fully-correct fix
+    would require per-hook advisory locks or PID-based liveness checks.
+    """
     conn.execute(
         SQL(
             "UPDATE hook_queue SET status = 'pending', updated_at = now() "

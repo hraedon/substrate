@@ -29,16 +29,21 @@ related: ["002", "003"]
 
 | # | Title | Severity | Status |
 |---|---|---|---|
-| 047 | Remove unused pytest-postgresql and testcontainers dev dependencies | low | proposed |
+| 052 | InMemorySubstrate _hook_queue grows unboundedly | low | proposed |
+| 051 | InMemorySubstrate poll_hooks fabricates nil UUID for missing work_item_id | low | proposed |
+| 050 | InMemorySubstrate poll_hooks does not dead-letter unregistered handlers | low | proposed |
 | 046 | Add CI configuration for automated make check | medium | proposed |
-| 045 | InMemorySubstrate accepts but silently ignores hmac_key_path | medium | proposed |
-| 044 | Test suite still imports drop_project_schema from substrate._testing | low | proposed |
-| 043 | read_events composite filter ordering semantics are undocumented | low | proposed |
 
 ## Resolved
 
 | # | Title | Severity | Resolution |
 |---|---|---|---|
+| 049 | check_actor_role_authorized silently allows actors with zero registered roles | low | [resolved/049](resolved/049-zero-roles-bypass-check.md) |
+| 048 | InMemorySubstrate poll_hooks does not track hook status or retry stuck hooks | low | [resolved/048](resolved/048-in-memory-hook-status-tracking.md) |
+| 047 | Stuck hook recovery could cause double-processing | low | [resolved/047](resolved/047-stuck-hook-double-processing.md) |
+| 045 | InMemorySubstrate accepts but silently ignores hmac_key_path | medium | [resolved/045](resolved/045-in-memory-substrate-ignores-hmac-key-path.md) |
+| 044 | Test suite still imports drop_project_schema from substrate._testing | low | [resolved/044](resolved/044-test-suite-imports-drop-project-schema-from-private-module.md) |
+| 043 | read_events composite filter ordering semantics are undocumented | low | [resolved/043](resolved/043-read-events-composite-ordering-semantics.md) |
 | 042 | Expose Substrate DSN (or equivalent) as public API | medium | `Substrate.connection_info` property implemented and stable; returns `ConnectionInfo(host, port, database, project)` |
 | 041 | Conformance tests missing coverage for claim event actor_id, dead-letter, replay drift, hook consumer | medium | [resolved/041](resolved/041-conformance-coverage-gaps.md) |
 | 040 | InMemorySubstrate read_events composited filters; real Substrate is mutually exclusive | medium | [resolved/040](resolved/040-in-memory-read-events-filter-semantics.md) |

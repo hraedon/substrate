@@ -4,6 +4,47 @@ Structured log of development sessions and milestones.
 
 ---
 
+## 2026-05-07 — Session 15 (continued): Breadcrumb sweep round 2 (BC-047, BC-048, BC-049)
+
+**Focus:** Close out all remaining open breadcrumbs except BC-046 (CI config, out of scope).
+
+**Delivered:**
+
+1. **BC-049 (low): Zero-roles bypass documented** — Added docstrings to `check_actor_role_authorized` (`_actor_roles.py`) and `_check_actor_role_authorized` (`_in_memory.py`) explaining FR-24 semantics: enforcement only applies to actors with at least one registered role.
+
+2. **BC-048 (low): InMemorySubstrate hook status tracking** — Added `status` and `updated_at` fields to in-memory hook queue entries. `poll_hooks` now resets stuck `in_progress` entries (>5 min), marks entries `in_progress` before dispatch, `completed` on success, `dead_lettered` on max retries. Parity with real backend's `poll_and_process_hooks`.
+
+3. **BC-047 (low): Stuck-hook double-processing documented** — Added docstring to `poll_and_process_hooks` (`_hooks.py`) documenting the double-processing risk: slow-but-not-stuck handlers may be re-dispatched. Accepted as design limitation; advisory locks noted as future fix.
+
+**Breadcrumbs resolved:** BC-047, BC-048, BC-049.
+
+**Remaining open:** BC-046 (CI configuration) — medium, infrastructure item.
+
+**Test Results:** 282 passed, lint clean.
+
+---
+
+## 2026-05-07 — Session 15: Breadcrumb sweep (BC-043, BC-044, BC-045)
+
+**Focus:** Resolve open breadcrumbs prioritized by severity.
+
+**Context:** Three open breadcrumbs selected: BC-045 (medium, InMemorySubstrate signing parity), BC-044 (low, test import dogfooding), BC-043 (low, read_events ordering docs).
+
+**Delivered:**
+
+1. **BC-045 (medium): InMemorySubstrate loads hmac_key_path** — When `hmac_key_path` is non-empty, `InMemorySubstrate` now creates a real `KeySet` and signs events with HMAC-SHA256 via `_signing.sign_event`. Empty `hmac_key_path` (default) retains dummy signing for test convenience. Catches configuration drift early.
+   - `src/substrate/_in_memory.py`: Added `KeySet` import, `_sign_event` import, `self._key_set` field, real signing branch in `_make_event`, `key_set=self._key_set` on all 6 call sites.
+
+2. **BC-044 (low): Test suite dogfoods public API** — Migrated all 23 test files from `substrate._testing` to `substrate.testing` for `drop_project_schema`. Internal symbols (`KeySet`, `raw_transaction`, etc.) remain in `_testing`.
+
+3. **BC-043 (low): read_events ordering documented** — Added ordering semantics to docstrings in both `Substrate.read_events` (`__init__.py`) and `InMemorySubstrate.read_events` (`_in_memory.py`): work_item_id → ASC by event_seq; time range → ASC by (timestamp, event_seq); otherwise → DESC.
+
+**Breadcrumbs resolved:** BC-043, BC-044, BC-045.
+
+**Test Results:** 282 passed, lint clean.
+
+---
+
 ## 2026-05-07 — Session 14: GLM must-have/should-have items, composite read_events, public API closeouts
 
 **Focus:** Deliver 6 GLM items (3 must-have, 3 should-have) from SF2 Phase 2 integration sweep.

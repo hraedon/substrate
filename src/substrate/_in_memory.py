@@ -7,6 +7,8 @@ from pathlib import Path
 
 from ._errors import ErrorCode, SubstrateError
 from ._integrity import SUBSTRATE_VERSION
+from ._keys import KeySet
+from ._signing import sign_event as _sign_event
 from ._types import (
     ActorRole,
     Claim,
@@ -56,7 +58,35 @@ def _make_event(
     transition: str | None,
     payload: dict | None,
     timestamp: datetime,
+    key_set: KeySet | None = None,
 ) -> Event:
+    if key_set is not None:
+        key_entry = key_set.active_key()
+        signature, canonical_hash, canonical_envelope = _sign_event(
+            event_id=event_id,
+            work_item_id=work_item_id,
+            actor_id=actor_id,
+            transition=transition,
+            payload=payload,
+            key=key_entry.secret,
+        )
+        return Event(
+            event_id=event_id,
+            work_item_id=work_item_id,
+            event_seq=event_seq,
+            actor_id=actor_id,
+            actor_kind=actor_kind,
+            actor_metadata=actor_metadata,
+            key_id=key_entry.key_id,
+            workflow_name=workflow_name,
+            workflow_version=workflow_version,
+            timestamp=timestamp,
+            transition=transition,
+            payload=payload,
+            payload_canonical_hash=canonical_hash,
+            signature=signature,
+            canonical_envelope=canonical_envelope,
+        )
     return Event(
         event_id=event_id,
         work_item_id=work_item_id,
@@ -88,6 +118,9 @@ class InMemorySubstrate:
         prometheus_registry=None,
     ) -> None:
         self._project = project
+        self._key_set: KeySet | None = None
+        if hmac_key_path:
+            self._key_set = KeySet(hmac_key_path)
         self._workflows: dict[tuple[str, int], dict] = {}
         self._workflow_defs: dict[tuple[str, int], WorkflowDefinition] = {}
         self._workflow_hashes: dict[tuple[str, int], bytes] = {}
@@ -154,8 +187,16 @@ class InMemorySubstrate:
         self._hook_consumer_running = False
 
     def poll_hooks(self) -> int:
-        pending = list(self._hook_queue)
-        self._hook_queue.clear()
+        now = datetime.now(UTC)
+        for entry in self._hook_queue:
+            if (
+                entry.get("status") == "in_progress"
+                and entry.get("updated_at") is not None
+                and now - entry["updated_at"] > timedelta(minutes=5)
+            ):
+                entry["status"] = "pending"
+
+        pending = [e for e in self._hook_queue if e.get("status", "pending") == "pending"]
         processed = 0
         for entry in pending:
             handler = self._hook_handlers.get(entry["hook_name"])
@@ -169,8 +210,13 @@ class InMemorySubstrate:
                 transition=entry.get("transition"),
                 payload=entry.get("payload"),
             )
+
+            entry["status"] = "in_progress"
+            entry["updated_at"] = datetime.now(UTC)
+
             try:
                 handler(ctx)
+                entry["status"] = "completed"
                 processed += 1
             except Exception:
                 entry["retry_count"] += 1
@@ -187,6 +233,7 @@ class InMemorySubstrate:
                         "dead_lettered_at": datetime.now(UTC),
                         "original_hook_queue_id": entry["id"],
                     }
+                    entry["status"] = "dead_lettered"
                     work_item_id = entry.get("work_item_id")
                     if work_item_id:
                         wi = self._work_items.get(work_item_id)
@@ -200,7 +247,7 @@ class InMemorySubstrate:
                                 },
                             )
                 else:
-                    self._hook_queue.append(entry)
+                    entry["status"] = "pending"
         return processed
 
     def register_workflow(self, yaml_content: str) -> WorkflowVersion:
@@ -311,6 +358,7 @@ class InMemorySubstrate:
                 "not_before": not_before.isoformat() if not_before else None,
             },
             timestamp=now,
+            key_set=self._key_set,
         )
         self._events.setdefault(work_item_id, []).append(evt)
         self._event_id_index[event_id] = evt
@@ -385,6 +433,7 @@ class InMemorySubstrate:
             transition=transition,
             payload=payload,
             timestamp=now,
+            key_set=self._key_set,
         )
         self._events.setdefault(work_item_id, []).append(evt)
         self._event_id_index[event_id] = evt
@@ -512,6 +561,7 @@ class InMemorySubstrate:
             transition=transition_name,
             payload=stored_payload,
             timestamp=now,
+            key_set=self._key_set,
         )
         self._events.setdefault(work_item_id, []).append(evt)
         self._event_id_index[event_id] = evt
@@ -539,6 +589,8 @@ class InMemorySubstrate:
                     "payload": payload,
                     "retry_count": 0,
                     "max_retries": max_retries,
+                    "status": "pending",
+                    "updated_at": datetime.now(UTC),
                 })
 
         return evt
@@ -554,6 +606,16 @@ class InMemorySubstrate:
         limit: int = 100,
         before_seq: int | None = None,
     ) -> list[Event]:
+        """Read events with structured filters. Multiple filter dimensions
+        may be combined; results satisfy all provided criteria.
+
+        Ordering depends on which filters are active:
+
+        - ``work_item_id`` provided: ascending by ``event_seq``.
+        - Time range (``start``/``end``) without ``work_item_id``:
+          ascending by ``(timestamp, event_seq)``.
+        - Otherwise: descending by ``(timestamp, event_seq)``.
+        """
         if before_seq is not None and work_item_id is None:
             raise SubstrateError(
                 ErrorCode.INVALID_FILTER, "before_seq requires work_item_id",
@@ -1106,6 +1168,8 @@ class InMemorySubstrate:
             "payload": payload.get("event_payload"),
             "retry_count": 0,
             "max_retries": 3,
+            "status": "pending",
+            "updated_at": datetime.now(UTC),
         })
 
     def list_dead_lettered_hooks(self) -> list[DeadLetterEntry]:
@@ -1163,6 +1227,7 @@ class InMemorySubstrate:
             transition="not_before_set",
             payload={"not_before": not_before.isoformat() if not_before else None},
             timestamp=now,
+            key_set=self._key_set,
         )
         self._events.setdefault(work_item_id, []).append(evt)
         self._event_id_index[event_id] = evt
@@ -1268,6 +1333,12 @@ class InMemorySubstrate:
                 )
 
     def _check_actor_role_authorized(self, actor_id: str, role: str) -> None:
+        """Verify that *actor_id* is authorized for *role*.
+
+        Per FR-24, enforcement only applies to actors with at least one
+        registered role.  If the actor has zero registered roles, the
+        check passes silently.
+        """
         registered = {r for (aid, r) in self._actor_roles if aid == actor_id}
         if registered and role not in registered:
             raise SubstrateError(
@@ -1312,6 +1383,7 @@ class InMemorySubstrate:
             transition=transition,
             payload=payload,
             timestamp=now,
+            key_set=self._key_set,
         )
         self._events.setdefault(wi["work_item_id"], []).append(evt)
         self._event_id_index[event_id] = evt
@@ -1337,6 +1409,7 @@ class InMemorySubstrate:
             transition=transition,
             payload=payload,
             timestamp=now,
+            key_set=self._key_set,
         )
         self._events.setdefault(wi["work_item_id"], []).append(evt)
         self._event_id_index[event_id] = evt

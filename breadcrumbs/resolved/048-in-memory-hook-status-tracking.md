@@ -2,7 +2,7 @@
 number: "048"
 title: InMemorySubstrate poll_hooks does not track hook status or retry stuck hooks
 severity: low
-status: proposed
+status: resolved
 kind: improvement
 author: glm-5.1
 date: "2026-05-07"
@@ -17,3 +17,7 @@ The real backend's `poll_and_process_hooks` first resets stuck `in_progress` ent
 ## Proposed
 
 Add status tracking to in-memory hook queue entries (`pending`, `in_progress`, `completed`) and implement the same stuck-entry recovery logic. Alternatively, document the divergence and accept that the in-memory backend's simpler model is sufficient for unit tests.
+
+## Resolution
+
+Added `status` and `updated_at` fields to InMemorySubstrate hook queue entries. `poll_hooks` now resets stuck `in_progress` entries older than 5 minutes, sets `in_progress` before dispatching, marks `completed` on success, and tracks `dead_lettered` status. Parity with real backend's `poll_and_process_hooks`.

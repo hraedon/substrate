@@ -6,7 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from substrate._testing import Metrics, drop_project_schema, poll_and_process_hooks, raw_transaction
+from substrate._testing import Metrics, poll_and_process_hooks, raw_transaction
+from substrate.testing import drop_project_schema
 
 TESTS_DIR = Path(__file__).parent
 DSN = "postgresql://substrate_test:substrate_test@localhost:5432/substrate_test"

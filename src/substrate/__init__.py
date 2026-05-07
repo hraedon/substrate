@@ -693,6 +693,13 @@ class Substrate:
         """Read events with structured filters. Multiple filter dimensions
         may be combined; results satisfy all provided criteria.
 
+        Ordering depends on which filters are active:
+
+        - ``work_item_id`` provided: ascending by ``event_seq``.
+        - Time range (``start``/``end``) without ``work_item_id``:
+          ascending by ``(timestamp, event_seq)``.
+        - Otherwise: descending by ``(timestamp, event_seq)``.
+
         Args:
             work_item_id: Filter by work item (supports ``before_seq`` pagination).
             actor_id: Filter by actor.

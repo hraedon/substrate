@@ -2,7 +2,7 @@
 number: "043"
 title: read_events composite filter ordering semantics are undocumented
 severity: low
-status: proposed
+status: resolved
 kind: design
 author: assistant
 date: "2026-05-07"
@@ -23,3 +23,7 @@ This is consistent between real and in-memory backends today, but it is not stat
 ## Proposed
 
 Document the ordering rule explicitly in `Substrate.read_events` docstring and, if stable, in `spec.md` §19. Consider whether the rule should be simplified (e.g. always ASC by `timestamp`, `event_seq`) to reduce consumer surprise.
+
+## Resolution
+
+Documented ordering semantics in `Substrate.read_events` and `InMemorySubstrate.read_events` docstrings. Three-case rule is now explicit: work_item_id → ASC by event_seq; time range → ASC by (timestamp, event_seq); otherwise → DESC by (timestamp, event_seq).
