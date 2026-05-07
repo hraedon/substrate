@@ -37,10 +37,12 @@ class TestActorRoles:
         role_names = {r.role for r in roles}
         assert role_names == {"agent", "reviewer"}
 
-    def test_register_duplicate_role_raises(self, substrate):
+    def test_register_duplicate_role_is_idempotent(self, substrate):
         substrate.register_actor_role("agent-2", "agent")
-        with pytest.raises(Exception, match="ACTOR_ROLE_ALREADY_REGISTERED"):
-            substrate.register_actor_role("agent-2", "agent")
+        substrate.register_actor_role("agent-2", "agent")
+        roles = substrate.list_actor_roles(actor_id="agent-2")
+        role_names = {r.role for r in roles}
+        assert role_names == {"agent"}
 
     def test_unregister_role(self, substrate):
         substrate.register_actor_role("agent-3", "agent")

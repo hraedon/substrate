@@ -1,13 +1,12 @@
 ---
-number: "pending"
+number: "039"
 title: register_actor_role should be idempotent by default
 severity: low
-status: draft
+status: implemented
 kind: improvement
 author: claude-opus-4-7
 date: "2026-05-07"
-origin: software-factory-2 Phase 2 planning review
-tags: [api-ergonomics, idempotency]
+tags: [api-ergonomics, idempotency, sf2-phase2]
 ---
 
 ## Observation

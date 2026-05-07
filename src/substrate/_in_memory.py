@@ -544,33 +544,21 @@ class InMemorySubstrate:
             evts = list(self._events.get(work_item_id, []))
             if before_seq is not None:
                 evts = [e for e in evts if e.event_seq < before_seq]
-            evts = sorted(evts, key=lambda e: e.event_seq)
-            return evts[-limit:] if len(evts) > limit else evts
+        elif actor_id is not None or start is not None or transition is not None:
+            evts = []
+            for evt_list in self._events.values():
+                evts.extend(evt_list)
+        else:
+            return []
+
         if actor_id is not None:
-            result = []
-            for evts in self._events.values():
-                for e in evts:
-                    if e.actor_id == actor_id:
-                        result.append(e)
-            result.sort(key=lambda e: (e.timestamp, e.event_seq), reverse=True)
-            return result[:limit]
+            evts = [e for e in evts if e.actor_id == actor_id]
         if start is not None and end is not None:
-            result = []
-            for evts in self._events.values():
-                for e in evts:
-                    if start <= e.timestamp <= end:
-                        result.append(e)
-            result.sort(key=lambda e: (e.timestamp, e.event_seq))
-            return result[:limit]
+            evts = [e for e in evts if start <= e.timestamp <= end]
         if transition is not None:
-            result = []
-            for evts in self._events.values():
-                for e in evts:
-                    if e.transition == transition:
-                        result.append(e)
-            result.sort(key=lambda e: (e.timestamp, e.event_seq), reverse=True)
-            return result[:limit]
-        return []
+            evts = [e for e in evts if e.transition == transition]
+        evts = sorted(evts, key=lambda e: e.event_seq)
+        return evts[-limit:] if len(evts) > limit else evts
 
     def read_events_since(
         self,
@@ -1106,10 +1094,7 @@ class InMemorySubstrate:
     def register_actor_role(self, actor_id: str, role: str) -> None:
         key = (actor_id, role)
         if key in self._actor_roles:
-            raise SubstrateError(
-                ErrorCode.ACTOR_ROLE_ALREADY_REGISTERED,
-                f"Role {role!r} already registered for actor {actor_id!r}",
-            )
+            return
         self._actor_roles.add(key)
         self._actor_role_created[key] = datetime.now(UTC)
 

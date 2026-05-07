@@ -18,10 +18,7 @@ def register_actor_role(
         [actor_id, role],
     ).fetchone()
     if existing is not None:
-        raise SubstrateError(
-            ErrorCode.ACTOR_ROLE_ALREADY_REGISTERED,
-            f"Actor {actor_id!r} already has role {role!r}",
-        )
+        return
     conn.execute(
         SQL(
             "INSERT INTO actor_roles (actor_id, role) VALUES (%s, %s)"
