@@ -287,7 +287,7 @@ def validate_field_update(
             name=field_def["name"],
             type=field_def["type"],
             required=field_def.get("required", False),
-            default_value=field_def.get("default_value"),
+            default_value=field_def.get("default_value", field_def.get("default")),
             ui_visible=field_def.get("ui_visible", False),
             enum_values=field_def.get("enum_values"),
             target_work_item_type=field_def.get("target_work_item_type"),

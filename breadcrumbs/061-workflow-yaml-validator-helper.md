@@ -1,12 +1,11 @@
 ---
-number: "pending"
+number: "061"
 title: Provide a workflow-yaml validator that does not require a live database
 severity: low
-status: draft
+status: proposed
 kind: improvement
 author: claude-opus-4-7
-date: "2026-05-07"
-origin: software-factory-2 Phase 2 planning review
+date: "2026-05-08"
 tags: [api-ergonomics, ci, downstream-consumer]
 ---
 
@@ -23,5 +22,3 @@ No DB dependency. Suitable for CI lint pipelines and pre-commit hooks.
 ## Why low severity
 
 Workaround (real-DB round-trip) works. But it's slow, requires docker-compose in CI, and discourages running the check often. A pure validator runs in milliseconds and shifts the feedback loop from "CI tells you" to "your editor / pre-commit tells you."
-
-Bonus: a public validator gives substrate a hook for documenting the workflow YAML schema beyond code-as-spec.

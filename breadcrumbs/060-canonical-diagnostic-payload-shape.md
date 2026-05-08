@@ -1,12 +1,11 @@
 ---
-number: "pending"
+number: "060"
 title: Canonical diagnostic-payload shape for transition events
 severity: low
-status: draft
+status: proposed
 kind: design
 author: claude-opus-4-7
-date: "2026-05-07"
-origin: software-factory-2 Phase 2 planning review
+date: "2026-05-08"
 tags: [event-schema, observability, downstream-consumer]
 related: ["028"]
 ---

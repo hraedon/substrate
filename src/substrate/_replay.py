@@ -172,10 +172,10 @@ def replay(
                 replayed_state["needs_review"],
                 replayed_state["not_before"],
                 replayed_state["last_event_seq"],
-                live_row["last_event_at"],
+                None,
                 replayed_state["last_event_seq"] + 1,
-                live_row["claimed_by"],
-                live_row["claim_expires_at"],
+                None,
+                None,
                 replayed_state["attempt_number"],
             ],
         )

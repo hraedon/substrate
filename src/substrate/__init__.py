@@ -833,6 +833,7 @@ class Substrate:
         ttl_seconds: int = 300,
         *,
         event_id: uuid.UUID | None = None,
+        actor_kind: str = "agent",
     ) -> Claim:
         """Acquire a durable claim (lease) on a work item.
 
@@ -844,6 +845,7 @@ class Substrate:
             actor_id: Claiming actor.
             ttl_seconds: Lease duration in seconds (default 300).
             event_id: UUIDv4 idempotency key.
+            actor_kind: Kind of actor (default "agent").
 
         Returns:
             The ``Claim``.
@@ -852,6 +854,7 @@ class Substrate:
             SubstrateError: ``CLAIM_CONTESTED``, ``NOT_BEFORE_FUTURE``,
                 ``WORK_ITEM_NOT_FOUND``, ``INVALID_ARGUMENT``.
         """
+        _validate_actor_kind(actor_kind)
         if ttl_seconds <= 0:
             raise SubstrateError(
                 ErrorCode.INVALID_ARGUMENT,
@@ -864,7 +867,7 @@ class Substrate:
             with self._mgr.transaction() as conn:
                 claim, escalated, stolen = _acquire(
                     conn, work_item_id, actor_id, ttl_seconds,
-                    self._keys, event_id,
+                    self._keys, event_id, actor_kind,
                 )
 
             self._metrics.inc("claims_acquired", self._project)
@@ -934,6 +937,7 @@ class Substrate:
         actor_id: str,
         *,
         event_id: uuid.UUID | None = None,
+        actor_kind: str = "agent",
     ) -> None:
         """Release a claim held by the given actor.
 
@@ -941,16 +945,18 @@ class Substrate:
             work_item_id: Target work item.
             actor_id: Must match the current claim holder.
             event_id: UUIDv4 idempotency key.
+            actor_kind: Kind of actor (default "agent").
 
         Raises:
             SubstrateError: ``CLAIM_LOST``, ``CLAIM_NOT_FOUND``.
         """
+        _validate_actor_kind(actor_kind)
         from ._claims import release_claim as _release
 
         timer = OpTimer(self._project, "release_claim")
         try:
             with self._mgr.transaction() as conn:
-                _release(conn, work_item_id, actor_id, self._keys, event_id)
+                _release(conn, work_item_id, actor_id, self._keys, event_id, actor_kind)
 
             self._metrics.inc("claims_released", self._project)
             timer.log("ok", work_item_id=str(work_item_id))
@@ -1209,6 +1215,14 @@ class Substrate:
                         ErrorCode.WORK_ITEM_NOT_FOUND,
                         f"Work item {work_item_id} not found",
                     )
+
+                from ._events import check_idempotency as _check_idem
+
+                existing = _check_idem(
+                    conn, event_id, actor_id=actor_id, transition="not_before_set",
+                )
+                if existing is not None:
+                    return existing
 
                 conn.execute(
                     SQL("UPDATE work_items_current SET not_before = %s WHERE work_item_id = %s"),

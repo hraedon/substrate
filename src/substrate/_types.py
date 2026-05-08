@@ -157,6 +157,7 @@ class WorkItem:
     next_event_seq: int
     claimed_by: str | None
     claim_expires_at: datetime | None
+    attempt_number: int = 0
 
     def to_dict(self) -> dict:
         return {
@@ -177,6 +178,7 @@ class WorkItem:
                 if self.claim_expires_at
                 else None
             ),
+            "attempt_number": self.attempt_number,
         }
 
     @classmethod
@@ -203,6 +205,7 @@ class WorkItem:
                 if data.get("claim_expires_at")
                 else None
             ),
+            attempt_number=data.get("attempt_number", 0),
         )
 
 
@@ -286,7 +289,7 @@ class CustomFieldDef:
             name=data["name"],
             type=data["type"],
             required=data.get("required", False),
-            default_value=data.get("default_value"),
+            default_value=data.get("default_value", data.get("default")),
             ui_visible=data.get("ui_visible", False),
             enum_values=data.get("enum_values"),
             target_work_item_type=data.get("target_work_item_type"),

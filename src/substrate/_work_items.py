@@ -35,6 +35,7 @@ def _row_to_work_item(row: dict) -> WorkItem:
         next_event_seq=row["next_event_seq"],
         claimed_by=row["claimed_by"],
         claim_expires_at=row["claim_expires_at"],
+        attempt_number=row["attempt_number"],
     )
 
 
@@ -179,7 +180,7 @@ def _rebuild_wf(data: dict) -> WorkflowDefinition:
                     name=f["name"],
                     type=f["type"],
                     required=f.get("required", False),
-                    default_value=f.get("default_value"),
+                    default_value=f.get("default_value", f.get("default")),
                     ui_visible=f.get("ui_visible", False),
                     enum_values=f.get("enum_values"),
                     target_work_item_type=f.get("target_work_item_type"),

@@ -28,6 +28,7 @@ def acquire_claim(
     ttl_seconds: int,
     key_set: KeySet,
     event_id: uuid.UUID | None = None,
+    actor_kind: str = "agent",
 ) -> tuple[Claim, bool, bool]:
     from ._events import append_event, lock_work_item
 
@@ -118,7 +119,7 @@ def acquire_claim(
             conn=conn,
             work_item_id=work_item_id,
             actor_id=actor_id,
-            actor_kind="system",
+            actor_kind=actor_kind,
             actor_metadata=None,
             key_set=key_set,
             workflow_name=wi["workflow_name"],
@@ -137,7 +138,7 @@ def acquire_claim(
             conn=conn,
             work_item_id=work_item_id,
             actor_id=actor_id,
-            actor_kind="system",
+            actor_kind=actor_kind,
             actor_metadata=None,
             key_set=key_set,
             workflow_name=wi["workflow_name"],
@@ -279,6 +280,7 @@ def release_claim(
     actor_id: str,
     key_set: KeySet,
     event_id: uuid.UUID | None = None,
+    actor_kind: str = "agent",
 ) -> None:
     from ._events import append_event, lock_work_item
 
@@ -318,7 +320,7 @@ def release_claim(
             conn=conn,
             work_item_id=work_item_id,
             actor_id=actor_id,
-            actor_kind="system",
+            actor_kind=actor_kind,
             actor_metadata=None,
             key_set=key_set,
             workflow_name=wi["workflow_name"],

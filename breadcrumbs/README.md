@@ -30,11 +30,18 @@ related: ["002", "003"]
 | # | Title | Severity | Status |
 |---|---|---|---|
 | 053 | Add CI configuration for automated make check | medium | proposed |
+| 060 | Canonical diagnostic-payload shape for transition events | low | proposed |
+| 061 | Provide a workflow-yaml validator that does not require a live database | low | proposed |
 
 ## Resolved
 
 | # | Title | Severity | Resolution |
 |---|---|---|---|
+| 059 | validate_field_update uses "default_value" while YAML/schema uses "default" | low | Both keys accepted via fallback in `validate_field_update`, `_rebuild_wf`, and `CustomFieldDef.from_dict` |
+| 058 | Claim lifecycle events misattribute actor_kind as "system" for actor-triggered operations | low | Added `actor_kind` param (default `"agent"`) to `acquire_claim` and `release_claim` in both backends and public API; claim events now use caller's `actor_kind` |
+| 057 | Replay output table mixes replayed state with live-projection columns | low | Set `last_event_at`, `claimed_by`, `claim_expires_at` to NULL in replay output table since replay does not derive claim state |
+| 056 | WorkItem dataclass excludes attempt_number despite query fetching it | low | Added `attempt_number: int = 0` field to `WorkItem`; wired through `_row_to_work_item`, `_wi_to_work_item`, `to_dict`/`from_dict` |
+| 055 | update_not_before projection mutation precedes idempotency check — TOCTOU | high | Moved idempotency check before projection mutation in both backends; prevents projection corruption on duplicate event_id |
 | 054 | InMemorySubstrate and Postgres transition()/release_claim reset attempt_number by deleting claim row | high | Persist `attempt_number` on `work_items_current` and `_work_items` dict; `acquire_claim` increments from work item state instead of claim entry; migration 006 |
 | 052 | InMemorySubstrate _hook_queue grows unboundedly | low | Prunes completed/dead_lettered entries after `poll_hooks` batch processing |
 | 051 | InMemorySubstrate poll_hooks fabricates nil UUID for missing work_item_id | low | [resolved/051](resolved/051-in-memory-poll-hooks-nil-uuid-fallback.md) |

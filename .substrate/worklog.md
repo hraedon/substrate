@@ -4,6 +4,30 @@ Structured log of development sessions and milestones.
 
 ---
 
+## 2026-05-08 — Session 17: Adversarial-review breadcrumb sweep (BC-055–059)
+
+**Focus:** Resolve all five pending numbered breadcrumbs from adversarial review pass; promote two draft RFCs to numbered items.
+
+**Delivered:**
+
+1. **BC-055 (high): update_not_before TOCTOU** — Moved `check_idempotency` call before the `UPDATE work_items_current SET not_before` mutation in Postgres backend. Added early idempotency check in InMemory backend before mutating `wi["not_before"]`. Prevents projection corruption on duplicate `event_id`.
+
+2. **BC-056 (low): WorkItem excludes attempt_number** — Added `attempt_number: int = 0` field to `WorkItem` dataclass; wired through `_row_to_work_item`, `_wi_to_work_item`, `to_dict`/`from_dict`. Column was already fetched from DB but silently discarded.
+
+3. **BC-057 (low): Replay output mixed live/replayed columns** — Set `last_event_at`, `claimed_by`, `claim_expires_at` to NULL in replay output table INSERT. These were live-snapshot values, not replayed data, making the table semantically confusing.
+
+4. **BC-058 (low): Claim events actor_kind misattribution** — Added `actor_kind` parameter (default `"agent"`) to `acquire_claim` and `release_claim` in both backends and public API. Claim events now use caller's `actor_kind` instead of hardcoded `"system"`. `sweep_expired_claims` keeps `"system"` which is correct.
+
+5. **BC-059 (low): default_value vs default key inconsistency** — Made `validate_field_update`, `_rebuild_wf`, and `CustomFieldDef.from_dict` accept both `"default_value"` and `"default"` keys via fallback.
+
+6. **BC-060/061 promoted** — Moved draft breadcrumbs from `pending/` to numbered items (canonical diagnostic payload shape, workflow YAML validator helper).
+
+**Breadcrumbs resolved:** BC-055, BC-056, BC-057, BC-058, BC-059.
+
+**Test Results:** 282 passed, lint clean.
+
+---
+
 ## 2026-05-08 — Session 16: Opus feedback sweep + open breadcrumb fix
 
 **Focus:** Address three Opus feedback items; resolve three open InMemorySubstrate hook breadcrumbs.

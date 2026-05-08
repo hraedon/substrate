@@ -768,7 +768,9 @@ class InMemorySubstrate:
         ttl_seconds: int = 300,
         *,
         event_id: uuid.UUID | None = None,
+        actor_kind: str = "agent",
     ) -> Claim:
+        _validate_actor_kind(actor_kind)
         if ttl_seconds <= 0:
             raise SubstrateError(
                 ErrorCode.INVALID_ARGUMENT,
@@ -835,6 +837,7 @@ class InMemorySubstrate:
                     "attempt_number": attempt_number,
                 },
                 actor_id=actor_id,
+                actor_kind=actor_kind,
             )
         else:
             self._append_claim_event(
@@ -845,6 +848,7 @@ class InMemorySubstrate:
                     "attempt_number": attempt_number,
                 },
                 actor_id=actor_id,
+                actor_kind=actor_kind,
             )
 
         self._check_escalation(wi, attempt_number)
@@ -911,7 +915,9 @@ class InMemorySubstrate:
         actor_id: str,
         *,
         event_id: uuid.UUID | None = None,
+        actor_kind: str = "agent",
     ) -> None:
+        _validate_actor_kind(actor_kind)
         claim = self._claims.get(work_item_id)
         if claim is None:
             raise SubstrateError(
@@ -933,6 +939,7 @@ class InMemorySubstrate:
                 wi, event_id or uuid.uuid4(), "claim_released",
                 {"actor_id": actor_id},
                 actor_id=actor_id,
+                actor_kind=actor_kind,
             )
 
     def sweep_expired_claims(self) -> int:
@@ -1241,6 +1248,20 @@ class InMemorySubstrate:
                 f"Work item {work_item_id} not found",
             )
 
+        existing = self._event_id_index.get(event_id)
+        if existing is not None:
+            if existing.actor_id != actor_id:
+                raise SubstrateError(
+                    ErrorCode.IDEMPOTENCY_COLLISION_WITH_DIFFERENT_PAYLOAD,
+                    f"event_id {event_id} already used by actor {existing.actor_id!r}",
+                )
+            if existing.transition != "not_before_set":
+                raise SubstrateError(
+                    ErrorCode.IDEMPOTENCY_COLLISION_WITH_DIFFERENT_PAYLOAD,
+                    f"event_id {event_id} already used with transition {existing.transition!r}",
+                )
+            return existing
+
         wi["not_before"] = not_before
         now = datetime.now(UTC)
         evt = _make_event(
@@ -1396,7 +1417,7 @@ class InMemorySubstrate:
 
     def _append_claim_event(
         self, wi: dict, event_id: uuid.UUID, transition: str, payload: dict,
-        *, actor_id: str = "system",
+        *, actor_id: str = "system", actor_kind: str = "system",
     ) -> None:
         now = datetime.now(UTC)
         evt = _make_event(
@@ -1404,7 +1425,7 @@ class InMemorySubstrate:
             work_item_id=wi["work_item_id"],
             event_seq=wi["next_event_seq"],
             actor_id=actor_id,
-            actor_kind="system",
+            actor_kind=actor_kind,
             actor_metadata=None,
             workflow_name=wi["workflow_name"],
             workflow_version=wi["workflow_version"],
@@ -1468,4 +1489,5 @@ class InMemorySubstrate:
             next_event_seq=wi["next_event_seq"],
             claimed_by=wi.get("claimed_by"),
             claim_expires_at=wi.get("claim_expires_at"),
+            attempt_number=wi.get("attempt_number", 0),
         )
