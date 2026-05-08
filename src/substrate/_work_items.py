@@ -16,7 +16,7 @@ _WORK_ITEM_FIELDS = (
     "work_item_id, workflow_name, workflow_version, work_item_type, "
     "current_state, custom_fields, needs_review, not_before, "
     "last_event_seq, last_event_at, next_event_seq, "
-    "claimed_by, claim_expires_at"
+    "claimed_by, claim_expires_at, attempt_number"
 )
 
 

@@ -79,7 +79,7 @@ class TestEndToEndAgentPipeline:
         assert refreshed.claimed_by is None
 
         claim = substrate.acquire_claim(wi.work_item_id, "worker-1", ttl_seconds=300)
-        assert claim.attempt_number == 1
+        assert claim.attempt_number == 2
 
         substrate.transition(
             work_item_id=wi.work_item_id,
@@ -92,7 +92,7 @@ class TestEndToEndAgentPipeline:
         assert refreshed.current_state == "review"
 
         claim = substrate.acquire_claim(wi.work_item_id, "reviewer-1", ttl_seconds=300)
-        assert claim.attempt_number == 1
+        assert claim.attempt_number == 3
 
         review_page = substrate.query_work_items(
             workflow_name="test_workflow",

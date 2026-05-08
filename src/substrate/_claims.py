@@ -78,9 +78,8 @@ def acquire_claim(
         )
 
     prior_actor_id = None
-    attempt_number = 1
+    attempt_number = wi["attempt_number"] + 1
     if existing_claim is not None:
-        attempt_number = existing_claim["attempt_number"] + 1
         prior_actor_id = existing_claim["actor_id"]
 
     acquired_at = now
@@ -107,10 +106,10 @@ def acquire_claim(
 
     conn.execute(
         SQL(
-            "UPDATE work_items_current SET claimed_by = %s, claim_expires_at = %s "
-            "WHERE work_item_id = %s"
+            "UPDATE work_items_current SET claimed_by = %s, claim_expires_at = %s, "
+            "attempt_number = %s WHERE work_item_id = %s"
         ),
-        [actor_id, expires_at, work_item_id],
+        [actor_id, expires_at, attempt_number, work_item_id],
     )
 
     event_id = event_id or uuid.uuid4()

@@ -119,11 +119,11 @@ def replay(
 
         live_row = conn.execute(
             SQL(
-                "SELECT work_item_id, workflow_name, workflow_version, work_item_type, "
-                "current_state, custom_fields, needs_review, not_before, "
-                "last_event_seq, last_event_at, next_event_seq, "
-                "claimed_by, claim_expires_at "
-                "FROM work_items_current WHERE work_item_id = %s"
+            "SELECT work_item_id, workflow_name, workflow_version, work_item_type, "
+            "current_state, custom_fields, needs_review, not_before, "
+            "last_event_seq, last_event_at, next_event_seq, "
+            "claimed_by, claim_expires_at, attempt_number "
+            "FROM work_items_current WHERE work_item_id = %s"
             ),
             [wi_id],
         ).fetchone()
@@ -159,8 +159,8 @@ def replay(
                 "INSERT INTO {} (work_item_id, workflow_name, workflow_version, "
                 "work_item_type, current_state, custom_fields, needs_review, "
                 "not_before, last_event_seq, last_event_at, next_event_seq, "
-                "claimed_by, claim_expires_at) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+                "claimed_by, claim_expires_at, attempt_number) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
             ).format(Identifier(replay_table)),
             [
                 wi_id,
@@ -176,6 +176,7 @@ def replay(
                 replayed_state["last_event_seq"] + 1,
                 live_row["claimed_by"],
                 live_row["claim_expires_at"],
+                replayed_state["attempt_number"],
             ],
         )
 
@@ -208,6 +209,7 @@ def _replay_work_item(
     needs_review = False
     not_before: datetime | None = None
     last_seq = 0
+    attempt_number = 0
     warnings = 0
 
     for evt in events:
@@ -264,7 +266,8 @@ def _replay_work_item(
             "claim_expired",
             "hook_dead_lettered",
         ):
-            pass
+            if transition in ("claim_acquired", "claim_stolen"):
+                attempt_number += 1
         elif transition == "escalated":
             needs_review = True
         elif transition == "not_before_set":
@@ -309,6 +312,7 @@ def _replay_work_item(
         "needs_review": needs_review,
         "not_before": not_before,
         "last_event_seq": last_seq,
+        "attempt_number": attempt_number,
     }, warnings
 
 
@@ -322,6 +326,8 @@ def _states_match(replayed: dict, live: dict) -> bool:
     if replayed["needs_review"] != live["needs_review"]:
         return False
     if replayed["not_before"] != live["not_before"]:
+        return False
+    if replayed["attempt_number"] != live["attempt_number"]:
         return False
     return True
 
@@ -338,4 +344,6 @@ def _diff_fields(replayed: dict, live: dict) -> list[str]:
         diffs.append("needs_review")
     if replayed["not_before"] != live["not_before"]:
         diffs.append("not_before")
+    if replayed["attempt_number"] != live["attempt_number"]:
+        diffs.append("attempt_number")
     return diffs

@@ -362,6 +362,7 @@ class InMemorySubstrate:
             "next_event_seq": 1,
             "claimed_by": None,
             "claim_expires_at": None,
+            "attempt_number": 0,
         }
         self._work_items[work_item_id] = wi_state
 
@@ -806,9 +807,8 @@ class InMemorySubstrate:
             )
 
         prior_actor_id = None
-        attempt_number = 1
+        attempt_number = wi["attempt_number"] + 1
         if existing is not None:
-            attempt_number = existing["attempt_number"] + 1
             prior_actor_id = existing["actor_id"]
 
         acquired_at = now
@@ -821,6 +821,7 @@ class InMemorySubstrate:
             "attempt_number": attempt_number,
         }
         self._claims[work_item_id] = claim_data
+        wi["attempt_number"] = attempt_number
         wi["claimed_by"] = actor_id
         wi["claim_expires_at"] = expires_at
 
@@ -1115,6 +1116,7 @@ class InMemorySubstrate:
             derived_needs_review = False
             derived_not_before = None
             derived_last_seq = 0
+            derived_attempt_number = 0
             for evt in sorted(evts, key=lambda e: e.event_seq):
                 derived_last_seq = evt.event_seq
                 if evt.transition == "created":
@@ -1130,7 +1132,8 @@ class InMemorySubstrate:
                 elif evt.transition in ("claim_acquired", "claim_released", "claim_expired",
                                         "claim_stolen", "link_created", "link_removed",
                                         "hook_dead_lettered"):
-                    pass
+                    if evt.transition in ("claim_acquired", "claim_stolen"):
+                        derived_attempt_number += 1
                 elif evt.transition == "escalated":
                     derived_needs_review = True
                 elif evt.transition == "not_before_set":
@@ -1161,6 +1164,7 @@ class InMemorySubstrate:
                     or derived_needs_review != wi.get("needs_review", False)
                     or derived_not_before != wi.get("not_before")
                     or derived_last_seq != wi.get("last_event_seq", 0)
+                    or derived_attempt_number != wi.get("attempt_number", 0)
                 ):
                     drift += 1
                 else:

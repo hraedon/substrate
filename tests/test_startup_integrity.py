@@ -29,7 +29,7 @@ class TestMigrationRequired:
 
         with psycopg.connect(DSN, autocommit=True) as conn:
             conn.execute(
-                SQL("DELETE FROM {}.{} WHERE version = 5").format(
+                SQL("DELETE FROM {}.{} WHERE version = 6").format(
                     Identifier(project), Identifier("_substrate_migrations")
                 )
             )

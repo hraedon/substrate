@@ -29,14 +29,16 @@ related: ["002", "003"]
 
 | # | Title | Severity | Status |
 |---|---|---|---|
-| 052 | InMemorySubstrate _hook_queue grows unboundedly | low | proposed |
-| 051 | InMemorySubstrate poll_hooks fabricates nil UUID for missing work_item_id | low | proposed |
 | 053 | Add CI configuration for automated make check | medium | proposed |
 
 ## Resolved
 
 | # | Title | Severity | Resolution |
 |---|---|---|---|
+| 054 | InMemorySubstrate and Postgres transition()/release_claim reset attempt_number by deleting claim row | high | Persist `attempt_number` on `work_items_current` and `_work_items` dict; `acquire_claim` increments from work item state instead of claim entry; migration 006 |
+| 052 | InMemorySubstrate _hook_queue grows unboundedly | low | Prunes completed/dead_lettered entries after `poll_hooks` batch processing |
+| 051 | InMemorySubstrate poll_hooks fabricates nil UUID for missing work_item_id | low | [resolved/051](resolved/051-in-memory-poll-hooks-nil-uuid-fallback.md) |
+| 050 | InMemorySubstrate poll_hooks does not dead-letter unregistered handlers | low | [resolved/050](resolved/050-in-memory-poll-hooks-handler-not-registered.md) |
 | 049 | check_actor_role_authorized silently allows actors with zero registered roles | low | [resolved/049](resolved/049-zero-roles-bypass-check.md) |
 | 048 | InMemorySubstrate poll_hooks does not track hook status or retry stuck hooks | low | [resolved/048](resolved/048-in-memory-hook-status-tracking.md) |
 | 047 | Stuck hook recovery could cause double-processing | low | [resolved/047](resolved/047-stuck-hook-double-processing.md) |
