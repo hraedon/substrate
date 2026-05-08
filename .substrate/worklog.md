@@ -4,6 +4,34 @@ Structured log of development sessions and milestones.
 
 ---
 
+## 2026-05-08 — Session 16: Opus feedback sweep + open breadcrumb fix
+
+**Focus:** Address three Opus feedback items; resolve three open InMemorySubstrate hook breadcrumbs.
+
+**Delivered:**
+
+1. **Opus item 1 — `__init__.py` god-module assessment** — Verified the 1,337 lines are 100% façade: thin wrappers, docstrings, error-code translation, metric increments. No business logic beyond `_validate_actor_kind` (a 6-line guard). Decision: no extraction needed until additional Phase-3+ surface pushes it past ~1,500 lines.
+
+2. **Opus item 2 — working-tree churn** — `git status` showed zero modified files, clean tree. The 32 modified test files from Session 14 were committed in 930bb61. No stale drift.
+
+3. **Opus item 3 — README status text** — Changed "MVP complete. All Phase 1 FRs implemented and tested." → "MVP + Phase 2 + Phase 3 complete. All FRs implemented and tested. See `AGENTS.md` for current status."
+
+4. **BC-050 (low): InMemorySubstrate poll_hooks does not dead-letter unregistered handlers** — `_in_memory.py poll_hooks` now dead-letters entries with no registered handler, matching real backend (`_hooks.py:125-129`).
+
+5. **BC-051 (low): InMemorySubstrate poll_hooks nil UUID fallback** — Removed `uuid.UUID(int=0)` default. Missing `work_item_id` now dead-letters with error "work_item_id missing from payload", matching real backend (`_hooks.py:134-139`).
+
+6. **BC-052 (low): InMemorySubstrate hook-queue unbounded growth** — `poll_hooks` now prunes `_hook_queue` after each batch, removing `completed` and `dead_lettered` entries. Prevents memory leaks in long-running tests.
+
+7. **RFC renumbering** — Renumbered `RFC-046` → `RFC-053` to fix numbering collision with breadcrumb `046` and `resolved/046`.
+
+**Breadcrumbs resolved:** BC-050, BC-051, BC-052.
+
+**Remaining open:** RFC-053 (CI configuration) — medium, infrastructure item out of scope for agent sessions.
+
+**Test Results:** 282 passed, lint clean.
+
+---
+
 ## 2026-05-07 — Session 15 (continued): Breadcrumb sweep round 2 (BC-047, BC-048, BC-049)
 
 **Focus:** Close out all remaining open breadcrumbs except BC-046 (CI config, out of scope).

@@ -31,8 +31,7 @@ related: ["002", "003"]
 |---|---|---|---|
 | 052 | InMemorySubstrate _hook_queue grows unboundedly | low | proposed |
 | 051 | InMemorySubstrate poll_hooks fabricates nil UUID for missing work_item_id | low | proposed |
-| 050 | InMemorySubstrate poll_hooks does not dead-letter unregistered handlers | low | proposed |
-| 046 | Add CI configuration for automated make check | medium | proposed |
+| 053 | Add CI configuration for automated make check | medium | proposed |
 
 ## Resolved
 

@@ -1,5 +1,5 @@
 ---
-number: "046"
+number: "053"
 title: Add CI configuration for automated make check
 severity: medium
 status: proposed

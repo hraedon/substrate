@@ -186,6 +186,38 @@ class InMemorySubstrate:
     def stop_hook_consumer(self) -> None:
         self._hook_consumer_running = False
 
+    def _move_to_dead_letter(
+        self,
+        entry: dict,
+        error_message: str,
+    ) -> None:
+        entry["status"] = "dead_lettered"
+        entry["error_message"] = error_message
+        entry["dead_lettered_at"] = datetime.now(UTC)
+        self._dead_letter[entry["id"]] = {
+            "id": entry["id"],
+            "event_id": entry["event_id"],
+            "hook_name": entry["hook_name"],
+            "hook_type": entry.get("hook_type", "async"),
+            "payload": entry.get("payload"),
+            "retry_count": entry.get("retry_count", 0),
+            "error_message": error_message,
+            "dead_lettered_at": entry["dead_lettered_at"],
+            "original_hook_queue_id": entry["id"],
+        }
+        work_item_id = entry.get("work_item_id")
+        if work_item_id:
+            wi = self._work_items.get(work_item_id)
+            if wi is not None:
+                self._append_claim_event(
+                    wi, uuid.uuid4(), "hook_dead_lettered",
+                    {
+                        "hook_name": entry["hook_name"],
+                        "hook_queue_id": entry["id"],
+                        "error_message": error_message,
+                    },
+                )
+
     def poll_hooks(self) -> int:
         now = datetime.now(UTC)
         for entry in self._hook_queue:
@@ -201,11 +233,20 @@ class InMemorySubstrate:
         for entry in pending:
             handler = self._hook_handlers.get(entry["hook_name"])
             if handler is None:
+                self._move_to_dead_letter(entry, f"Handler {entry['hook_name']!r} not registered")
+                processed += 1
                 continue
+
+            work_item_id = entry.get("work_item_id")
+            if work_item_id is None:
+                self._move_to_dead_letter(entry, "work_item_id missing from payload")
+                processed += 1
+                continue
+
             ctx = HookContext(
                 hook_queue_id=entry["id"],
                 event_id=entry["event_id"],
-                work_item_id=entry.get("work_item_id", uuid.UUID(int=0)),
+                work_item_id=work_item_id,
                 hook_name=entry["hook_name"],
                 transition=entry.get("transition"),
                 payload=entry.get("payload"),
@@ -219,35 +260,18 @@ class InMemorySubstrate:
                 entry["status"] = "completed"
                 processed += 1
             except Exception:
-                entry["retry_count"] += 1
+                entry["retry_count"] = entry.get("retry_count", 0) + 1
                 max_retries = entry.get("max_retries", 3)
                 if entry["retry_count"] >= max_retries:
-                    self._dead_letter[entry["id"]] = {
-                        "id": entry["id"],
-                        "event_id": entry["event_id"],
-                        "hook_name": entry["hook_name"],
-                        "hook_type": entry.get("hook_type", "async"),
-                        "payload": entry.get("payload"),
-                        "retry_count": entry["retry_count"],
-                        "error_message": "handler failed",
-                        "dead_lettered_at": datetime.now(UTC),
-                        "original_hook_queue_id": entry["id"],
-                    }
-                    entry["status"] = "dead_lettered"
-                    work_item_id = entry.get("work_item_id")
-                    if work_item_id:
-                        wi = self._work_items.get(work_item_id)
-                        if wi is not None:
-                            self._append_claim_event(
-                                wi, uuid.uuid4(), "hook_dead_lettered",
-                                {
-                                    "hook_name": entry["hook_name"],
-                                    "hook_queue_id": entry["id"],
-                                    "error_message": "handler failed",
-                                },
-                            )
+                    self._move_to_dead_letter(entry, "handler failed")
+                    processed += 1
                 else:
                     entry["status"] = "pending"
+
+        self._hook_queue = [
+            e for e in self._hook_queue
+            if e.get("status") not in ("completed", "dead_lettered")
+        ]
         return processed
 
     def register_workflow(self, yaml_content: str) -> WorkflowVersion:

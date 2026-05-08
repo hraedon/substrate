@@ -119,4 +119,4 @@ Authoritative spec: `spec.md`. Machine-readable sidecar: `spec.yaml`.
 
 ## Status
 
-MVP complete. All Phase 1 FRs implemented and tested.
+MVP + Phase 2 + Phase 3 complete. All FRs implemented and tested. See `AGENTS.md` for current status.
