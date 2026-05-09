@@ -16,6 +16,7 @@ class TestActorMetadataDataclass:
             channel="chat",
             model="claude-sonnet",
             family="anthropic",
+            gate_name="interface_spec_syntax",
             attempt_n=2,
             context_hash="sha256:abc123",
         )
@@ -25,6 +26,7 @@ class TestActorMetadataDataclass:
             "channel": "chat",
             "model": "claude-sonnet",
             "family": "anthropic",
+            "gate_name": "interface_spec_syntax",
             "attempt_n": 2,
             "context_hash": "sha256:abc123",
         }

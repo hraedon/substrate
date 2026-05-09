@@ -47,6 +47,7 @@ class ActorMetadata:
     channel: str | None = None
     model: str | None = None
     family: str | None = None
+    gate_name: str | None = None
     attempt_n: int | None = None
     context_hash: str | None = None
 
@@ -60,6 +61,8 @@ class ActorMetadata:
             d["model"] = self.model
         if self.family is not None:
             d["family"] = self.family
+        if self.gate_name is not None:
+            d["gate_name"] = self.gate_name
         if self.attempt_n is not None:
             d["attempt_n"] = self.attempt_n
         if self.context_hash is not None:
@@ -73,6 +76,7 @@ class ActorMetadata:
             channel=data.get("channel"),
             model=data.get("model"),
             family=data.get("family"),
+            gate_name=data.get("gate_name"),
             attempt_n=data.get("attempt_n"),
             context_hash=data.get("context_hash"),
         )
