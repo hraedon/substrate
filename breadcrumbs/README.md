@@ -27,9 +27,7 @@ related: ["002", "003"]
 
 ## Open
 
-| # | Title | Severity | Status |
-|---|---|---|---|
-(none — all breadcrumbs resolved)
+No open breadcrumbs.
 
 ## RFCs (awaiting future work)
 
@@ -43,23 +41,21 @@ RFC breadcrumbs use the `RFC-` prefix to distinguish design proposals that canno
 
 | # | Title | Severity | Resolution |
 |---|---|---|---|
+| 063 | Add optional prompt_template_hash field to ActorMetadata | low | Added `prompt_template_hash: str | None = None` to `ActorMetadata`; round-trip via `to_dict`/`from_dict`; 5 tests in `test_actor_metadata_contract.py` |
 | 061 | Provide a workflow-yaml validator that does not require a live database | low | Added `validate_yaml(path_or_string) -> ValidationResult` to `_workflow.py`; exposed via `substrate.validate_yaml` and `substrate.testing.validate_yaml`; 11 tests in `test_validate_yaml.py` |
 | 060 | Canonical diagnostic-payload shape for transition events | low | Accepted as documentation convention; added "Diagnostic payload shape" pattern to AGENTS.md |
-| 053 | Add CI configuration for automated make check | medium | Added `.github/workflows/ci.yml` with Postgres service container, Python 3.11/3.12 matrix, `make check` |
-| 047 | Remove unused pytest-postgresql and testcontainers dev dependencies | low | Removed from `pyproject.toml`; confirmed zero imports across codebase |
-| 035 | Telemetry-via-hooks pattern needs a concrete worked example | low | Added `examples/telemetry_via_hooks.py` and AGENTS.md pattern section linking to it |
-| 034 | "No comments in code" style rule — onboarding trade-off | low | Documented convention in AGENTS.md with full rationale; spec-cross-references acceptable |
-| 033 | Schema-per-project and PgBouncer transaction-mode incompatibility | medium | Documented as known constraint in AGENTS.md |
 | 058 | Claim lifecycle events misattribute actor_kind as "system" for actor-triggered operations | low | Added `actor_kind` param (default `"agent"`) to `acquire_claim` and `release_claim` in both backends and public API; claim events now use caller's `actor_kind` |
 | 057 | Replay output table mixes replayed state with live-projection columns | low | Set `last_event_at`, `claimed_by`, `claim_expires_at` to NULL in replay output table since replay does not derive claim state |
 | 056 | WorkItem dataclass excludes attempt_number despite query fetching it | low | Added `attempt_number: int = 0` field to `WorkItem`; wired through `_row_to_work_item`, `_wi_to_work_item`, `to_dict`/`from_dict` |
 | 055 | update_not_before projection mutation precedes idempotency check — TOCTOU | high | Moved idempotency check before projection mutation in both backends; prevents projection corruption on duplicate event_id |
 | 054 | InMemorySubstrate and Postgres transition()/release_claim reset attempt_number by deleting claim row | high | Persist `attempt_number` on `work_items_current` and `_work_items` dict; `acquire_claim` increments from work item state instead of claim entry; migration 006 |
+| 053 | Add CI configuration for automated make check | medium | Added `.github/workflows/ci.yml` with Postgres service container, Python 3.11/3.12 matrix, `make check` |
 | 052 | InMemorySubstrate _hook_queue grows unboundedly | low | Prunes completed/dead_lettered entries after `poll_hooks` batch processing |
 | 051 | InMemorySubstrate poll_hooks fabricates nil UUID for missing work_item_id | low | [resolved/051](resolved/051-in-memory-poll-hooks-nil-uuid-fallback.md) |
 | 050 | InMemorySubstrate poll_hooks does not dead-letter unregistered handlers | low | [resolved/050](resolved/050-in-memory-poll-hooks-handler-not-registered.md) |
 | 049 | check_actor_role_authorized silently allows actors with zero registered roles | low | [resolved/049](resolved/049-zero-roles-bypass-check.md) |
 | 048 | InMemorySubstrate poll_hooks does not track hook status or retry stuck hooks | low | [resolved/048](resolved/048-in-memory-hook-status-tracking.md) |
+| 047 | Remove unused pytest-postgresql and testcontainers dev dependencies | low | Removed from `pyproject.toml`; confirmed zero imports across codebase |
 | 047 | Stuck hook recovery could cause double-processing | low | [resolved/047](resolved/047-stuck-hook-double-processing.md) |
 | 045 | InMemorySubstrate accepts but silently ignores hmac_key_path | medium | [resolved/045](resolved/045-in-memory-substrate-ignores-hmac-key-path.md) |
 | 044 | Test suite still imports drop_project_schema from substrate._testing | low | [resolved/044](resolved/044-test-suite-imports-drop-project-schema-from-private-module.md) |
@@ -71,6 +67,9 @@ RFC breadcrumbs use the `RFC-` prefix to distinguish design proposals that canno
 | 038 | Ship first-class test fixtures / in-memory backend for downstream consumers | high | [resolved/038](resolved/038-in-memory-test-fixtures.md) |
 | 037 | work_item_ref fields accept any UUID — no existence or type enforcement at runtime | high | [resolved/037](resolved/037-work-item-ref-no-runtime-validation.md) |
 | 036 | External Postgres deployment guide | n/a | [resolved/036](resolved/036-external-postgres-deployment.md) |
+| 035 | Telemetry-via-hooks pattern needs a concrete worked example | low | Added `examples/telemetry_via_hooks.py` and AGENTS.md pattern section linking to it |
+| 034 | "No comments in code" style rule — onboarding trade-off | low | Documented convention in AGENTS.md with full rationale; spec-cross-references acceptable |
+| 033 | Schema-per-project and PgBouncer transaction-mode incompatibility | medium | Documented as known constraint in AGENTS.md |
 | 032 | Spec-to-Code-to-Test Alignment Audit | n/a | [resolved/032](resolved/032-spec-alignment-audit.md) |
 | 031 | Error-Path Coverage Sweep | n/a | [resolved/031](resolved/031-error-path-coverage-sweep.md) |
 | 030 | Replay drift assertion on long histories | low | [resolved/030](resolved/030-replay-drift-long-history.md) |

@@ -50,6 +50,7 @@ class ActorMetadata:
     gate_name: str | None = None
     attempt_n: int | None = None
     context_hash: str | None = None
+    prompt_template_hash: str | None = None
 
     def to_dict(self) -> dict:
         d: dict[str, object] = {}
@@ -67,6 +68,8 @@ class ActorMetadata:
             d["attempt_n"] = self.attempt_n
         if self.context_hash is not None:
             d["context_hash"] = self.context_hash
+        if self.prompt_template_hash is not None:
+            d["prompt_template_hash"] = self.prompt_template_hash
         return d
 
     @classmethod
@@ -79,6 +82,7 @@ class ActorMetadata:
             gate_name=data.get("gate_name"),
             attempt_n=data.get("attempt_n"),
             context_hash=data.get("context_hash"),
+            prompt_template_hash=data.get("prompt_template_hash"),
         )
 
 

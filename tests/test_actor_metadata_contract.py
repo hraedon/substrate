@@ -19,6 +19,7 @@ class TestActorMetadataDataclass:
             gate_name="interface_spec_syntax",
             attempt_n=2,
             context_hash="sha256:abc123",
+            prompt_template_hash="sha256:def456",
         )
         d = am.to_dict()
         assert d == {
@@ -29,6 +30,7 @@ class TestActorMetadataDataclass:
             "gate_name": "interface_spec_syntax",
             "attempt_n": 2,
             "context_hash": "sha256:abc123",
+            "prompt_template_hash": "sha256:def456",
         }
         restored = ActorMetadata.from_dict(d)
         assert restored == am
@@ -38,11 +40,25 @@ class TestActorMetadataDataclass:
         d = am.to_dict()
         assert d == {"role": "agent", "model": "gpt-4"}
         assert "channel" not in d
+        assert "prompt_template_hash" not in d
 
     def test_empty_dict(self):
         am = ActorMetadata()
         assert am.to_dict() == {}
         assert ActorMetadata.from_dict({}) == am
+
+    def test_prompt_template_hash_roundtrip(self):
+        am = ActorMetadata(prompt_template_hash="sha256:xyz789")
+        d = am.to_dict()
+        assert d == {"prompt_template_hash": "sha256:xyz789"}
+        assert ActorMetadata.from_dict(d) == am
+
+    def test_prompt_template_hash_absent_from_dict(self):
+        am = ActorMetadata(role="agent")
+        d = am.to_dict()
+        assert "prompt_template_hash" not in d
+        restored = ActorMetadata.from_dict(d)
+        assert restored.prompt_template_hash is None
 
 
 def _make_event(actor_metadata):

@@ -94,7 +94,7 @@
   - `work_item_id`
   - `event_seq` — **gap-free** monotonic per work-item; allocated under the canonical lock (§17.2, §17.4).
   - `actor_id`, `actor_kind` — authenticated via HMAC (FR-15). Trust tier: *authenticated*.
-  - `actor_metadata` (jsonb) — agents SHOULD include `model`, `provider`, and `role_source` (`config` / `env` / `prompt`). Trust tier: *actor-claimed* (signed-by-actor but not validated against any registry; see BR-09 and §17.9).
+  - `actor_metadata` (jsonb) — agents SHOULD include `model`, `provider`, and `role_source` (`config` / `env` / `prompt`). Content-hash fields `context_hash` and `prompt_template_hash` enable per-attempt and per-template correlation in telemetry. Trust tier: *actor-claimed* (signed-by-actor but not validated against any registry; see BR-09 and §17.9).
   - `key_id` — authenticated.
   - `workflow_version` — pinned at work-item creation; immutable thereafter (BR-02).
   - `timestamp` — Postgres `now()`, server-stamped (BR-08). Trust tier: *server-stamped*.
@@ -145,7 +145,7 @@
   - **Trust tiers** (consumed by §17.9 and §11):
     - *Authenticated* — `actor_id`, `key_id` (HMAC-verified).
     - *Server-stamped* — `timestamp`, `event_seq` (substrate writes; not under actor control).
-    - *Actor-claimed* — `actor_metadata` (incl. `role`, `model`, `provider`, `role_source`) — signed by actor but not validated against any registry. FR-24 provides opt-in enforcement: when an actor has registered roles, the claimed role is validated against the actor's allowed set; otherwise it is trusted.
+    - *Actor-claimed* — `actor_metadata` (incl. `role`, `model`, `provider`, `role_source`, `context_hash`, `prompt_template_hash`) — signed by actor but not validated against any registry. FR-24 provides opt-in enforcement: when an actor has registered roles, the claimed role is validated against the actor's allowed set; otherwise it is trusted.
 - FR-16 **[MVP]**: Replay — rebuild a `work_items_current_replay_<timestamp>` projection from the event log on demand. Each historical transition validates against the workflow version recorded on its event. Output is a fresh table; substrate does NOT mutate live `work_items_current` in place. Operator decides whether to atomically swap (rename) or diff for verification.
 
   Substrate also produces a companion `replay_report_<timestamp>` table categorizing each work-item:
@@ -600,7 +600,7 @@ Consumers (UI, audit tooling, replay validators) MUST distinguish:
 |---|---|---|
 | Authenticated | `actor_id`, `key_id` | HMAC-verified; tampering detected at re-verification (AC-26) |
 | Server-stamped | `timestamp`, `event_seq` | Substrate writes; not under actor control; trustworthy modulo substrate bugs |
-| Actor-claimed | All of `actor_metadata` (incl. `role`, `model`, `provider`, `role_source`) | Signed-by-actor (so non-repudiable that *this actor said this*). When FR-24 actor roles are registered, `role` is additionally enforced against the actor's registered set; otherwise treated as diagnostic. |
+| Actor-claimed | All of `actor_metadata` (incl. `role`, `model`, `provider`, `role_source`, `context_hash`, `prompt_template_hash`) | Signed-by-actor (so non-repudiable that *this actor said this*). When FR-24 actor roles are registered, `role` is additionally enforced against the actor's registered set; otherwise treated as diagnostic. |
 
 The federated UI and downstream consumers should surface this distinction visually (e.g., role displayed with a "claimed" qualifier until enforcement lands) rather than treating all event fields as equally authoritative.
 
