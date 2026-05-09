@@ -2,6 +2,10 @@
 
 Coordination + state plane for agent pipelines over Postgres.
 
+[![Tests](https://img.shields.io/badge/tests-293%20passing-brightgreen)]()
+[![License](https://img.shields.io/badge/license-MIT-blue)]()
+[![Status](https://img.shields.io/badge/status-MVP%20%2B%20Phase%202%20%2B%20Phase%203%20complete-brightgreen)]()
+
 Substrate is a Python library that provides durable claims, event-sourced state, validated state transitions, and typed links for multi-role agent pipelines. Each project deploys substrate as its own isolated instance using schema-per-project isolation within a single Postgres database.
 
 ## Quick Start
@@ -120,3 +124,7 @@ Authoritative spec: `spec.md`. Machine-readable sidecar: `spec.yaml`.
 ## Status
 
 MVP + Phase 2 + Phase 3 complete. All FRs implemented and tested. See `AGENTS.md` for current status.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

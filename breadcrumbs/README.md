@@ -29,15 +29,27 @@ related: ["002", "003"]
 
 | # | Title | Severity | Status |
 |---|---|---|---|
-| 053 | Add CI configuration for automated make check | medium | proposed |
-| 060 | Canonical diagnostic-payload shape for transition events | low | proposed |
-| 061 | Provide a workflow-yaml validator that does not require a live database | low | proposed |
+(none — all breadcrumbs resolved)
+
+## RFCs (awaiting future work)
+
+RFC breadcrumbs use the `RFC-` prefix to distinguish design proposals that cannot be acted on until later phases. They are candidates for improvement, not actionable defects.
+
+| # | Title | Severity | Phase Needed |
+|---|---|---|---|
+| RFC-062 | Single-source-of-truth backend contract — eliminate hand-maintained InMemorySubstrate parity | high | Phase 4+ or dedicated infrastructure sprint |
 
 ## Resolved
 
 | # | Title | Severity | Resolution |
 |---|---|---|---|
-| 059 | validate_field_update uses "default_value" while YAML/schema uses "default" | low | Both keys accepted via fallback in `validate_field_update`, `_rebuild_wf`, and `CustomFieldDef.from_dict` |
+| 061 | Provide a workflow-yaml validator that does not require a live database | low | Added `validate_yaml(path_or_string) -> ValidationResult` to `_workflow.py`; exposed via `substrate.validate_yaml` and `substrate.testing.validate_yaml`; 11 tests in `test_validate_yaml.py` |
+| 060 | Canonical diagnostic-payload shape for transition events | low | Accepted as documentation convention; added "Diagnostic payload shape" pattern to AGENTS.md |
+| 053 | Add CI configuration for automated make check | medium | Added `.github/workflows/ci.yml` with Postgres service container, Python 3.11/3.12 matrix, `make check` |
+| 047 | Remove unused pytest-postgresql and testcontainers dev dependencies | low | Removed from `pyproject.toml`; confirmed zero imports across codebase |
+| 035 | Telemetry-via-hooks pattern needs a concrete worked example | low | Added `examples/telemetry_via_hooks.py` and AGENTS.md pattern section linking to it |
+| 034 | "No comments in code" style rule — onboarding trade-off | low | Documented convention in AGENTS.md with full rationale; spec-cross-references acceptable |
+| 033 | Schema-per-project and PgBouncer transaction-mode incompatibility | medium | Documented as known constraint in AGENTS.md |
 | 058 | Claim lifecycle events misattribute actor_kind as "system" for actor-triggered operations | low | Added `actor_kind` param (default `"agent"`) to `acquire_claim` and `release_claim` in both backends and public API; claim events now use caller's `actor_kind` |
 | 057 | Replay output table mixes replayed state with live-projection columns | low | Set `last_event_at`, `claimed_by`, `claim_expires_at` to NULL in replay output table since replay does not derive claim state |
 | 056 | WorkItem dataclass excludes attempt_number despite query fetching it | low | Added `attempt_number: int = 0` field to `WorkItem`; wired through `_row_to_work_item`, `_wi_to_work_item`, `to_dict`/`from_dict` |

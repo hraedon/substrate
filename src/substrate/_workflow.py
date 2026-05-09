@@ -15,6 +15,8 @@ from ._types import (
     CustomFieldDef,
     LinkTypeDef,
     TransitionDef,
+    ValidationError,
+    ValidationResult,
     WorkflowDefinition,
     WorkItemTypeDef,
 )
@@ -418,3 +420,41 @@ def compute_content_hash(wf: WorkflowDefinition) -> bytes:
 def compute_content_hash_from_dict(data: dict) -> bytes:
     canonical_bytes = canonicalize(data)
     return hashlib.sha256(canonical_bytes).digest()
+
+
+def validate_yaml(source: str | Path) -> ValidationResult:
+    if isinstance(source, Path):
+        raw = source.read_text()
+    else:
+        try:
+            p = Path(source)
+            if p.exists():
+                raw = p.read_text()
+            else:
+                raw = source
+        except Exception:
+            raw = source
+
+    errors: list[ValidationError] = []
+
+    try:
+        data = parse_workflow_yaml(raw)
+    except SubstrateError as e:
+        errors.append(ValidationError(path="(root)", message=str(e)))
+        return ValidationResult(valid=False, errors=errors)
+
+    try:
+        validate_json_schema(data)
+    except SubstrateError as e:
+        errors.append(ValidationError(path="(root)", message=str(e)))
+
+    try:
+        _validate_semantics(data)
+    except SubstrateError as e:
+        errors.append(ValidationError(path="(root)", message=str(e)))
+
+    if errors:
+        return ValidationResult(valid=False, errors=errors)
+
+    wf = build_definition(data, raw)
+    return ValidationResult(valid=True, errors=[], workflow=wf)

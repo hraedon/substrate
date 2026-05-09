@@ -48,10 +48,17 @@ from ._types import (
     ReplayReportEntry as ReplayReportEntry,
 )
 from ._types import (
+    ValidationError as ValidationError,
+)
+from ._types import (
+    ValidationResult as ValidationResult,
+)
+from ._types import (
     WorkflowDefinition as WorkflowDefinition,
 )
 from ._workflow import parse_and_validate
 from ._workflow import parse_file as parse_file
+from ._workflow import validate_yaml as validate_yaml
 
 log = structlog.get_logger()
 

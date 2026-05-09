@@ -2,7 +2,7 @@
 number: "061"
 title: Provide a workflow-yaml validator that does not require a live database
 severity: low
-status: proposed
+status: implemented
 kind: improvement
 author: claude-opus-4-7
 date: "2026-05-08"

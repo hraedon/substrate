@@ -650,6 +650,48 @@ class ActorRole:
 
 
 @dataclass(frozen=True)
+class ValidationError:
+    path: str
+    message: str
+
+    def to_dict(self) -> dict:
+        return {"path": self.path, "message": self.message}
+
+    @classmethod
+    def from_dict(cls, data: dict) -> ValidationError:
+        return cls(path=data["path"], message=data["message"])
+
+
+@dataclass(frozen=True)
+class ValidationResult:
+    valid: bool
+    errors: list[ValidationError]
+    workflow: WorkflowDefinition | None = None
+
+    def to_dict(self) -> dict:
+        d = {
+            "valid": self.valid,
+            "errors": [e.to_dict() for e in self.errors],
+        }
+        if self.workflow is not None:
+            d["workflow"] = self.workflow.to_dict()
+        return d
+
+    @classmethod
+    def from_dict(cls, data: dict) -> ValidationResult:
+        wf = (
+            WorkflowDefinition.from_dict(data["workflow"])
+            if data.get("workflow")
+            else None
+        )
+        return cls(
+            valid=data["valid"],
+            errors=[ValidationError.from_dict(e) for e in data["errors"]],
+            workflow=wf,
+        )
+
+
+@dataclass(frozen=True)
 class DeadLetterEntry:
     id: int
     event_id: uuid.UUID

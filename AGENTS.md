@@ -115,6 +115,9 @@ sub.update_not_before(work_item_id, not_before, actor_id)  # reschedule work ite
 sub.register_actor_role(actor_id, role)              # register actor → role mapping
 sub.unregister_actor_role(actor_id, role)            # remove actor → role mapping
 sub.list_actor_roles(actor_id=None)                  # list registered roles
+
+# Standalone utilities (no database required)
+validate_yaml(yaml_string_or_path)                     # -> ValidationResult
 ```
 
 **API constraints:**
@@ -195,3 +198,20 @@ Recommended shape:
 3. **Rebuild path**: drain the events table through the same handler in `event_seq` order to reconstruct from scratch.
 
 Do not add denormalized columns to substrate's `events` table for consumer-specific dimensions. Substrate stays general; the consumer maintains its own reporting layer.
+
+### Diagnostic payload shape
+
+Transition events carrying failure information should use this canonical shape for `payload`:
+
+```python
+payload = {
+    "diagnostics": {
+        "kind": str,           # consumer-defined enum value (e.g. "gate_fail", "channel_fail")
+        "summary": str,        # one-line human-readable
+        "messages": list[str], # detailed lines
+        "context": dict,       # consumer-specific structured data
+    }
+}
+```
+
+Each consumer extends `kind` and `context` for its domain. This shape is not code-enforced, but using it prevents fragmentation across consumers and ensures telemetry tooling can aggregate failures uniformly.

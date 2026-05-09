@@ -4,6 +4,32 @@ Structured log of development sessions and milestones.
 
 ---
 
+## 2026-05-08 — Session 18: Breadcrumb closeout sweep (BC-060, BC-061, RFC-033/034/035/047/053)
+
+**Focus:** Resolve all remaining open breadcrumbs and RFCs.
+
+**Delivered:**
+
+1. **BC-060 (low): Canonical diagnostic payload shape** — Accepted as documentation convention. Added "Diagnostic payload shape" pattern section to AGENTS.md with recommended `payload.diagnostics` shape.
+
+2. **BC-061 (low): Workflow YAML validator helper** — Implemented `validate_yaml(source)` in `_workflow.py`. Accepts YAML string or file path. Returns `ValidationResult(valid, errors, workflow)` — no database required, suitable for CI lint pipelines and pre-commit hooks. Added `ValidationError` and `ValidationResult` frozen dataclasses to `_types.py`. Exported via `substrate.validate_yaml` and `substrate.testing.validate_yaml`. 11 tests in `test_validate_yaml.py`.
+
+3. **RFC-033 (medium): PgBouncer transaction-mode documentation** — Already implemented in session 10. Moved from `breadcrumbs/rfc/` to `breadcrumbs/resolved/`.
+
+4. **RFC-034 (low): No-comments onboarding trade-off** — Already implemented in session 10. Moved from `breadcrumbs/rfc/` to `breadcrumbs/resolved/`.
+
+5. **RFC-035 (low): Telemetry-via-hooks worked example** — Already implemented in session 10. Moved from `breadcrumbs/rfc/` to `breadcrumbs/resolved/`.
+
+6. **RFC-047 (low): Remove unused dev dependencies** — Removed `pytest-postgresql` and `testcontainers[postgres]` from `pyproject.toml` dev dependencies; confirmed zero imports across codebase. Moved to resolved.
+
+7. **RFC-053 (medium): CI configuration** — Added `.github/workflows/ci.yml` with Postgres 15 service container, Python 3.11/3.12 matrix, `make check` (lint + test). Moved to resolved.
+
+**Breadcrumbs resolved:** BC-060, BC-061, RFC-033, RFC-034, RFC-035, RFC-047, RFC-053.
+
+**Open breadcrumbs:** None. All items resolved.
+
+**Test Results:** 293 passed, lint clean.
+
 ## 2026-05-08 — Session 17: Adversarial-review breadcrumb sweep (BC-055–059)
 
 **Focus:** Resolve all five pending numbered breadcrumbs from adversarial review pass; promote two draft RFCs to numbered items.
