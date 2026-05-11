@@ -35,6 +35,18 @@ related: ["002", "003"]
 | 068 | validate_field_values takes WorkflowDefinition but validate_field_update takes raw dict | low | [deferred/068](deferred/068-inconsistent-workflow-param-types.md) |
 | 065 | HookConsumer nested transaction risk with append_event under savepoints | low | [deferred/065](deferred/065-hook-savepoint-deadlock.md) |
 
+## Open
+
+| # | Title | Severity | Tags |
+|---|---|---|---|
+| 100 | HMAC key material held in plaintext Python memory | critical | security, fr-15 |
+| 101 | actor_metadata role claim is self-attested without independent verification | critical | security, fr-12, fr-24, br-09 |
+| 102 | No rate limiting on any public API endpoint | critical | security, denial-of-service |
+| 103 | Client-supplied event_id not validated as UUIDv4; no entropy guarantees | critical | idempotency, fr-03 |
+| 104 | expected_event_seq missing from create_link and remove_link — TOCTOU race | high | concurrency, br-10 |
+| 105 | Replay skip of revoked-key events with continue_on_revoked=True leaves bad events in log | high | security, replay, fr-25 |
+| 106 | Unbounded not_before allows permanent work-item DOS | high | denial-of-service, fr-26 |
+
 ## Resolved
 
 | # | Title | Severity | Resolution |
