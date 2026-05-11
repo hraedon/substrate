@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 import psycopg
 from psycopg.sql import SQL
 
+from ._contract import (
+    resolve_claim_acquire,
+    resolve_heartbeat,
+    should_escalate,
+    validate_release,
+)
 from ._errors import ErrorCode, SubstrateError
 from ._keys import KeySet
 from ._types import Claim
@@ -41,80 +47,65 @@ def acquire_claim(
 
     now = datetime.now(UTC)
 
-    if wi["not_before"] is not None and wi["not_before"] > now:
-        raise SubstrateError(
-            ErrorCode.NOT_BEFORE_FUTURE,
-            f"Work item not_before is {wi['not_before'].isoformat()}, cannot claim yet",
-        )
-
     existing_claim = conn.execute(
         SQL("SELECT * FROM claims WHERE work_item_id = %s"),
         [work_item_id],
     ).fetchone()
 
-    if existing_claim is not None and existing_claim["expires_at"] >= now:
-        if existing_claim["actor_id"] == actor_id:
-            new_expires = now + timedelta(seconds=ttl_seconds)
-            conn.execute(
-                SQL("UPDATE claims SET expires_at = %s WHERE work_item_id = %s"),
-                [new_expires, work_item_id],
-            )
-            conn.execute(
-                SQL(
-                    "UPDATE work_items_current SET claim_expires_at = %s "
-                    "WHERE work_item_id = %s"
-                ),
-                [new_expires, work_item_id],
-            )
-            return Claim(
-                work_item_id=work_item_id,
-                actor_id=actor_id,
-                acquired_at=existing_claim["acquired_at"],
-                expires_at=new_expires,
-                attempt_number=existing_claim["attempt_number"],
-            ), False, False
-        raise SubstrateError(
-            ErrorCode.CLAIM_CONTESTED,
-            f"Work item {work_item_id} is already claimed by {existing_claim['actor_id']}",
+    result = resolve_claim_acquire(
+        wi_not_before=wi["not_before"],
+        claim_actor_id=existing_claim["actor_id"] if existing_claim else None,
+        claim_expires_at=existing_claim["expires_at"] if existing_claim else None,
+        claim_acquired_at=existing_claim["acquired_at"] if existing_claim else None,
+        claim_attempt_number=existing_claim["attempt_number"] if existing_claim else None,
+        wi_attempt_number=wi["attempt_number"],
+        actor_id=actor_id,
+        ttl_seconds=ttl_seconds,
+        now=now,
+    )
+
+    if result.action == "extend":
+        conn.execute(
+            SQL("UPDATE claims SET expires_at = %s WHERE work_item_id = %s"),
+            [result.expires_at, work_item_id],
         )
-
-    prior_actor_id = None
-    attempt_number = wi["attempt_number"] + 1
-    if existing_claim is not None:
-        prior_actor_id = existing_claim["actor_id"]
-
-    acquired_at = now
-    expires_at = acquired_at + timedelta(seconds=ttl_seconds)
-
-    if existing_claim is not None:
         conn.execute(
             SQL(
-                "UPDATE claims SET actor_id = %s, acquired_at = %s, "
-                "expires_at = %s, attempt_number = %s "
+                "UPDATE work_items_current SET claim_expires_at = %s "
                 "WHERE work_item_id = %s"
             ),
-            [actor_id, acquired_at, expires_at, attempt_number, work_item_id],
+            [result.expires_at, work_item_id],
         )
-    else:
-        conn.execute(
-            SQL(
-                "INSERT INTO claims "
-                "(work_item_id, actor_id, acquired_at, expires_at, attempt_number) "
-                "VALUES (%s, %s, %s, %s, %s)"
-            ),
-            [work_item_id, actor_id, acquired_at, expires_at, attempt_number],
-        )
+        return Claim(
+            work_item_id=work_item_id,
+            actor_id=actor_id,
+            acquired_at=result.acquired_at,
+            expires_at=result.expires_at,
+            attempt_number=result.attempt_number,
+        ), False, False
+
+    conn.execute(
+        SQL(
+            "INSERT INTO claims "
+            "(work_item_id, actor_id, acquired_at, expires_at, attempt_number) "
+            "VALUES (%s, %s, %s, %s, %s) "
+            "ON CONFLICT (work_item_id) DO UPDATE SET "
+            "actor_id = EXCLUDED.actor_id, acquired_at = EXCLUDED.acquired_at, "
+            "expires_at = EXCLUDED.expires_at, attempt_number = EXCLUDED.attempt_number"
+        ),
+        [work_item_id, actor_id, result.acquired_at, result.expires_at, result.attempt_number],
+    )
 
     conn.execute(
         SQL(
             "UPDATE work_items_current SET claimed_by = %s, claim_expires_at = %s, "
             "attempt_number = %s WHERE work_item_id = %s"
         ),
-        [actor_id, expires_at, attempt_number, work_item_id],
+        [actor_id, result.expires_at, result.attempt_number, work_item_id],
     )
 
-    event_id = event_id or uuid.uuid4()
-    if prior_actor_id is not None:
+    eid = event_id or uuid.uuid4()
+    if result.event_transition is not None and result.event_payload is not None:
         append_event(
             conn=conn,
             work_item_id=work_item_id,
@@ -124,44 +115,21 @@ def acquire_claim(
             key_set=key_set,
             workflow_name=wi["workflow_name"],
             workflow_version=wi["workflow_version"],
-            transition="claim_stolen",
-            payload={
-                "prior_actor_id": prior_actor_id,
-                "new_actor_id": actor_id,
-                "attempt_number": attempt_number,
-            },
-            event_id=event_id,
-            _prelocked_wi=wi,
-        )
-    else:
-        append_event(
-            conn=conn,
-            work_item_id=work_item_id,
-            actor_id=actor_id,
-            actor_kind=actor_kind,
-            actor_metadata=None,
-            key_set=key_set,
-            workflow_name=wi["workflow_name"],
-            workflow_version=wi["workflow_version"],
-            transition="claim_acquired",
-            payload={
-                "actor_id": actor_id,
-                "ttl_seconds": ttl_seconds,
-                "attempt_number": attempt_number,
-            },
-            event_id=event_id,
+            transition=result.event_transition,
+            payload=result.event_payload,
+            event_id=eid,
             _prelocked_wi=wi,
         )
 
-    stolen = prior_actor_id is not None
-    escalated = _check_escalation(conn, wi, attempt_number, key_set)
+    stolen = result.action == "steal"
+    escalated = _check_escalation(conn, wi, result.attempt_number, key_set)
 
     claim = Claim(
         work_item_id=work_item_id,
         actor_id=actor_id,
-        acquired_at=acquired_at,
-        expires_at=expires_at,
-        attempt_number=attempt_number,
+        acquired_at=result.acquired_at,
+        expires_at=result.expires_at,
+        attempt_number=result.attempt_number,
     )
     return claim, escalated, stolen
 
@@ -185,14 +153,12 @@ def _check_escalation(
         return False
 
     threshold = wf_row["definition"].get("attempt_threshold")
-    if threshold is None or attempt_number < threshold:
-        return False
-
     existing = conn.execute(
         SQL("SELECT 1 FROM events WHERE work_item_id = %s AND transition = 'escalated'"),
         [wi["work_item_id"]],
     ).fetchone()
-    if existing is not None:
+
+    if not should_escalate(threshold, existing is not None, attempt_number):
         return False
 
     conn.execute(
@@ -233,44 +199,31 @@ def heartbeat_claim(
         [work_item_id],
     ).fetchone()
 
-    if claim_row is None:
-        raise SubstrateError(
-            ErrorCode.CLAIM_NOT_FOUND,
-            f"No claim found for work item {work_item_id}",
-        )
+    now = datetime.now(UTC)
+    result = resolve_heartbeat(
+        claim_state=claim_row,
+        actor_id=actor_id,
+        ttl_seconds=ttl_seconds,
+        expected_attempt_number=expected_attempt_number,
+        work_item_id=work_item_id,
+        now=now,
+    )
 
-    if claim_row["actor_id"] != actor_id:
-        raise SubstrateError(
-            ErrorCode.CLAIM_LOST,
-            f"Claim on {work_item_id} is now held by {claim_row['actor_id']}, not {actor_id}",
-        )
-
-    if (
-        expected_attempt_number is not None
-        and claim_row["attempt_number"] != expected_attempt_number
-    ):
-        raise SubstrateError(
-            ErrorCode.CLAIM_LOST,
-            f"Claim attempt_number is {claim_row['attempt_number']}, "
-            f"expected {expected_attempt_number}",
-        )
-
-    new_expires = datetime.now(UTC) + timedelta(seconds=ttl_seconds)
     conn.execute(
         SQL("UPDATE claims SET expires_at = %s WHERE work_item_id = %s"),
-        [new_expires, work_item_id],
+        [result.new_expires_at, work_item_id],
     )
     conn.execute(
         SQL("UPDATE work_items_current SET claim_expires_at = %s WHERE work_item_id = %s"),
-        [new_expires, work_item_id],
+        [result.new_expires_at, work_item_id],
     )
 
     return Claim(
         work_item_id=work_item_id,
         actor_id=actor_id,
-        acquired_at=claim_row["acquired_at"],
-        expires_at=new_expires,
-        attempt_number=claim_row["attempt_number"],
+        acquired_at=result.acquired_at,
+        expires_at=result.new_expires_at,
+        attempt_number=result.attempt_number,
     )
 
 
@@ -291,17 +244,7 @@ def release_claim(
         [work_item_id],
     ).fetchone()
 
-    if claim_row is None:
-        raise SubstrateError(
-            ErrorCode.CLAIM_NOT_FOUND,
-            f"No claim found for work item {work_item_id}",
-        )
-
-    if claim_row["actor_id"] != actor_id:
-        raise SubstrateError(
-            ErrorCode.CLAIM_LOST,
-            f"Claim on {work_item_id} is held by {claim_row['actor_id']}, not {actor_id}",
-        )
+    validate_release(claim_row, actor_id, work_item_id)
 
     conn.execute(
         SQL("DELETE FROM claims WHERE work_item_id = %s"),

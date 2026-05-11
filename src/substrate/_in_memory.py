@@ -5,6 +5,23 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from ._contract import (
+    check_actor_role_authorized,
+    check_append_blocked,
+    check_expected_seq,
+    check_idempotency,
+    check_role_gating,
+    resolve_claim_acquire,
+    resolve_heartbeat,
+    resolve_transition,
+    should_escalate,
+    validate_actor_kind,
+    validate_link_type,
+    validate_read_events_filters,
+    validate_release,
+    validate_ttl,
+    validate_work_item_exists,
+)
 from ._errors import ErrorCode, SubstrateError
 from ._integrity import SUBSTRATE_VERSION
 from ._keys import KeySet
@@ -35,15 +52,6 @@ from ._workflow import (
 _DUMMY_KEY_ID = "in-memory"
 _DUMMY_SIG = b"\x00" * 32
 _DUMMY_HASH = b"\x00" * 32
-_VALID_ACTOR_KINDS = {"agent", "human", "system"}
-
-
-def _validate_actor_kind(actor_kind: str) -> None:
-    if actor_kind not in _VALID_ACTOR_KINDS:
-        raise SubstrateError(
-            ErrorCode.INVALID_ACTOR_KIND,
-            f"Invalid actor_kind {actor_kind!r}. Must be one of {sorted(_VALID_ACTOR_KINDS)}",
-        )
 
 
 def _make_event(
@@ -324,7 +332,7 @@ class InMemorySubstrate:
         not_before: datetime | None = None,
         event_id: uuid.UUID | None = None,
     ) -> tuple[WorkItem, Event]:
-        _validate_actor_kind(actor_kind)
+        validate_actor_kind(actor_kind)
         if event_id is None:
             event_id = uuid.uuid4()
 
@@ -402,54 +410,37 @@ class InMemorySubstrate:
         event_id: uuid.UUID | None = None,
         expected_event_seq: int | None = None,
     ) -> Event:
-        _validate_actor_kind(actor_kind)
+        validate_actor_kind(actor_kind)
         if event_id is None:
             event_id = uuid.uuid4()
 
         wi = self._work_items.get(work_item_id)
-        if wi is None:
-            raise SubstrateError(
-                ErrorCode.WORK_ITEM_NOT_FOUND,
-                f"Work item {work_item_id} not found",
-            )
+        validate_work_item_exists(wi, work_item_id)
 
         if transition is not None:
             wf_data = self._workflows.get((wi["workflow_name"], wi["workflow_version"]))
             if wf_data is not None:
-                for t in wf_data.get("transitions", []):
-                    if t["name"] == transition:
-                        raise SubstrateError(
-                            ErrorCode.TRANSITION_VIA_APPEND_BLOCKED,
-                            f"Transition {transition!r} is defined in workflow "
-                            f"{wi['workflow_name']!r}. Use Substrate.transition() instead.",
-                        )
+                check_append_blocked(
+                    wf_data.get("transitions", []),
+                    transition,
+                    wi["workflow_name"],
+                )
 
-        existing = self._event_id_index.get(event_id)
+        existing = check_idempotency(
+            self._event_id_index.get(event_id),
+            actor_id,
+            transition,
+        )
         if existing is not None:
-            if existing.actor_id != actor_id:
-                raise SubstrateError(
-                    ErrorCode.IDEMPOTENCY_COLLISION_WITH_DIFFERENT_PAYLOAD,
-                    f"event_id {event_id} already used by actor {existing.actor_id!r}",
-                )
-            if existing.transition != transition:
-                raise SubstrateError(
-                    ErrorCode.IDEMPOTENCY_COLLISION_WITH_DIFFERENT_PAYLOAD,
-                    f"event_id {event_id} already used with transition {existing.transition!r}",
-                )
             return existing
 
-        next_seq = wi["next_event_seq"]
-        if expected_event_seq is not None and next_seq != expected_event_seq:
-            raise SubstrateError(
-                ErrorCode.CONCURRENT_MODIFICATION,
-                f"Expected event_seq {expected_event_seq}, but current next is {next_seq}",
-            )
+        check_expected_seq(wi["next_event_seq"], expected_event_seq)
 
         now = datetime.now(UTC)
         evt = _make_event(
             event_id=event_id,
             work_item_id=work_item_id,
-            event_seq=next_seq,
+            event_seq=wi["next_event_seq"],
             actor_id=actor_id,
             actor_kind=actor_kind,
             actor_metadata=actor_metadata,
@@ -463,9 +454,9 @@ class InMemorySubstrate:
         self._events.setdefault(work_item_id, []).append(evt)
         self._event_id_index[event_id] = evt
 
-        wi["last_event_seq"] = next_seq
+        wi["last_event_seq"] = wi["next_event_seq"]
         wi["last_event_at"] = now
-        wi["next_event_seq"] = next_seq + 1
+        wi["next_event_seq"] += 1
 
         return evt
 
@@ -482,16 +473,12 @@ class InMemorySubstrate:
         event_id: uuid.UUID | None = None,
         expected_event_seq: int | None = None,
     ) -> Event:
-        _validate_actor_kind(actor_kind)
+        validate_actor_kind(actor_kind)
         if event_id is None:
             event_id = uuid.uuid4()
 
         wi = self._work_items.get(work_item_id)
-        if wi is None:
-            raise SubstrateError(
-                ErrorCode.WORK_ITEM_NOT_FOUND,
-                f"Work item {work_item_id} not found",
-            )
+        validate_work_item_exists(wi, work_item_id)
 
         wf_key = (wi["workflow_name"], wi["workflow_version"])
         wf_data = self._workflows.get(wf_key)
@@ -501,28 +488,22 @@ class InMemorySubstrate:
                 f"Workflow {wi['workflow_name']!r} v{wi['workflow_version']} not found",
             )
 
-        transition_def = None
-        for t in wf_data.get("transitions", []):
-            if t["name"] == transition_name and t["from_state"] == wi["current_state"]:
-                transition_def = t
-                break
+        transition_def = resolve_transition(
+            wf_data.get("transitions", []),
+            wi["current_state"],
+            transition_name,
+            wi["workflow_name"],
+            wi["workflow_version"],
+        )
 
-        if transition_def is None:
-            raise SubstrateError(
-                ErrorCode.INVALID_TRANSITION,
-                f"Transition {transition_name!r} not valid from state "
-                f"{wi['current_state']!r} in {wi['workflow_name']!r} "
-                f"v{wi['workflow_version']}",
-            )
-
-        if transition_def.get("allowed_roles"):
-            role = (actor_metadata or {}).get("role")
-            if role not in transition_def["allowed_roles"]:
-                raise SubstrateError(
-                    ErrorCode.ROLE_NOT_PERMITTED,
-                    f"Role {role!r} not permitted for transition {transition_name!r}",
-                )
-            self._check_actor_role_authorized(actor_id, role)
+        role = check_role_gating(
+            transition_def.get("allowed_roles", []),
+            actor_metadata,
+            transition_name,
+        )
+        if role is not None:
+            registered = {r for (aid, r) in self._actor_roles if aid == actor_id}
+            check_actor_role_authorized(registered, actor_id, role)
 
         if custom_fields:
             validate_field_update(wf_data, wi["work_item_type"], custom_fields)
@@ -551,21 +532,15 @@ class InMemorySubstrate:
                 )
                 run_validator(validator_name, handler, ctx)
 
-        existing = self._event_id_index.get(event_id)
+        existing = check_idempotency(
+            self._event_id_index.get(event_id),
+            actor_id,
+            transition_name,
+        )
         if existing is not None:
-            if existing.actor_id != actor_id or existing.transition != transition_name:
-                raise SubstrateError(
-                    ErrorCode.IDEMPOTENCY_COLLISION_WITH_DIFFERENT_PAYLOAD,
-                    f"event_id {event_id} already used",
-                )
             return existing
 
-        next_seq = wi["next_event_seq"]
-        if expected_event_seq is not None and next_seq != expected_event_seq:
-            raise SubstrateError(
-                ErrorCode.CONCURRENT_MODIFICATION,
-                f"Expected event_seq {expected_event_seq}, but current next is {next_seq}",
-            )
+        check_expected_seq(wi["next_event_seq"], expected_event_seq)
 
         stored_payload = dict(payload) if payload else {}
         if custom_fields:
@@ -577,7 +552,7 @@ class InMemorySubstrate:
         evt = _make_event(
             event_id=event_id,
             work_item_id=work_item_id,
-            event_seq=next_seq,
+            event_seq=wi["next_event_seq"],
             actor_id=actor_id,
             actor_kind=actor_kind,
             actor_metadata=actor_metadata,
@@ -592,9 +567,9 @@ class InMemorySubstrate:
         self._event_id_index[event_id] = evt
 
         wi["current_state"] = new_state
-        wi["last_event_seq"] = next_seq
+        wi["last_event_seq"] = wi["next_event_seq"]
         wi["last_event_at"] = now
-        wi["next_event_seq"] = next_seq + 1
+        wi["next_event_seq"] += 1
         wi["claimed_by"] = None
         wi["claim_expires_at"] = None
         self._claims.pop(work_item_id, None)
@@ -631,24 +606,7 @@ class InMemorySubstrate:
         limit: int = 100,
         before_seq: int | None = None,
     ) -> list[Event]:
-        """Read events with structured filters. Multiple filter dimensions
-        may be combined; results satisfy all provided criteria.
-
-        Ordering depends on which filters are active:
-
-        - ``work_item_id`` provided: ascending by ``event_seq``.
-        - Time range (``start``/``end``) without ``work_item_id``:
-          ascending by ``(timestamp, event_seq)``.
-        - Otherwise: descending by ``(timestamp, event_seq)``.
-        """
-        if before_seq is not None and work_item_id is None:
-            raise SubstrateError(
-                ErrorCode.INVALID_FILTER, "before_seq requires work_item_id",
-            )
-        if (start is None) != (end is None):
-            raise SubstrateError(
-                ErrorCode.INVALID_FILTER, "start and end must be provided together",
-            )
+        validate_read_events_filters(before_seq, work_item_id, start, end)
 
         if work_item_id is not None:
             evts = list(self._events.get(work_item_id, []))
@@ -770,95 +728,56 @@ class InMemorySubstrate:
         event_id: uuid.UUID | None = None,
         actor_kind: str = "agent",
     ) -> Claim:
-        _validate_actor_kind(actor_kind)
-        if ttl_seconds <= 0:
-            raise SubstrateError(
-                ErrorCode.INVALID_ARGUMENT,
-                "ttl_seconds must be positive",
-            )
+        validate_actor_kind(actor_kind)
+        validate_ttl(ttl_seconds)
+
         wi = self._work_items.get(work_item_id)
-        if wi is None:
-            raise SubstrateError(
-                ErrorCode.WORK_ITEM_NOT_FOUND,
-                f"Work item {work_item_id} not found",
-            )
+        validate_work_item_exists(wi, work_item_id)
 
         now = datetime.now(UTC)
-        if wi.get("not_before") is not None and wi["not_before"] > now:
-            raise SubstrateError(
-                ErrorCode.NOT_BEFORE_FUTURE,
-                f"Work item not_before is {wi['not_before'].isoformat()}, cannot claim yet",
-            )
-
         existing = self._claims.get(work_item_id)
-        if existing is not None and existing["expires_at"] >= now:
-            if existing["actor_id"] == actor_id:
-                new_expires = now + timedelta(seconds=ttl_seconds)
-                existing["expires_at"] = new_expires
-                wi["claim_expires_at"] = new_expires
-                return Claim(
-                    work_item_id=work_item_id,
-                    actor_id=actor_id,
-                    acquired_at=existing["acquired_at"],
-                    expires_at=new_expires,
-                    attempt_number=existing["attempt_number"],
-                )
-            raise SubstrateError(
-                ErrorCode.CLAIM_CONTESTED,
-                f"Work item {work_item_id} is already claimed by {existing['actor_id']}",
-            )
+        claim_state = existing if existing is not None else None
 
-        prior_actor_id = None
-        attempt_number = wi["attempt_number"] + 1
-        if existing is not None:
-            prior_actor_id = existing["actor_id"]
-
-        acquired_at = now
-        expires_at = acquired_at + timedelta(seconds=ttl_seconds)
+        result = resolve_claim_acquire(
+            wi_not_before=wi.get("not_before"),
+            claim_actor_id=claim_state["actor_id"] if claim_state else None,
+            claim_expires_at=claim_state["expires_at"] if claim_state else None,
+            claim_acquired_at=claim_state["acquired_at"] if claim_state else None,
+            claim_attempt_number=claim_state["attempt_number"] if claim_state else None,
+            wi_attempt_number=wi["attempt_number"],
+            actor_id=actor_id,
+            ttl_seconds=ttl_seconds,
+            now=now,
+        )
 
         claim_data = {
             "actor_id": actor_id,
-            "acquired_at": acquired_at,
-            "expires_at": expires_at,
-            "attempt_number": attempt_number,
+            "acquired_at": result.acquired_at,
+            "expires_at": result.expires_at,
+            "attempt_number": result.attempt_number,
         }
         self._claims[work_item_id] = claim_data
-        wi["attempt_number"] = attempt_number
+        wi["attempt_number"] = result.attempt_number
         wi["claimed_by"] = actor_id
-        wi["claim_expires_at"] = expires_at
+        wi["claim_expires_at"] = result.expires_at
 
-        eid = event_id or uuid.uuid4()
-        if prior_actor_id is not None:
+        if result.event_transition is not None:
+            eid = event_id or uuid.uuid4()
             self._append_claim_event(
-                wi, eid, "claim_stolen",
-                {
-                    "prior_actor_id": prior_actor_id,
-                    "new_actor_id": actor_id,
-                    "attempt_number": attempt_number,
-                },
-                actor_id=actor_id,
-                actor_kind=actor_kind,
-            )
-        else:
-            self._append_claim_event(
-                wi, eid, "claim_acquired",
-                {
-                    "actor_id": actor_id,
-                    "ttl_seconds": ttl_seconds,
-                    "attempt_number": attempt_number,
-                },
+                wi, eid, result.event_transition,
+                result.event_payload,
                 actor_id=actor_id,
                 actor_kind=actor_kind,
             )
 
-        self._check_escalation(wi, attempt_number)
+        self._check_escalation(wi, result.attempt_number)
 
         return Claim(
             work_item_id=work_item_id,
             actor_id=actor_id,
-            acquired_at=acquired_at,
-            expires_at=expires_at,
-            attempt_number=attempt_number,
+            acquired_at=result.acquired_at,
+            expires_at=result.expires_at,
+            attempt_number=result.attempt_number,
         )
 
     def heartbeat_claim(
@@ -869,44 +788,30 @@ class InMemorySubstrate:
         *,
         expected_attempt_number: int | None = None,
     ) -> Claim:
-        if ttl_seconds <= 0:
-            raise SubstrateError(
-                ErrorCode.INVALID_ARGUMENT,
-                "ttl_seconds must be positive",
-            )
+        now = datetime.now(UTC)
         claim = self._claims.get(work_item_id)
-        if claim is None:
-            raise SubstrateError(
-                ErrorCode.CLAIM_NOT_FOUND,
-                f"No claim found for work item {work_item_id}",
-            )
-        if claim["actor_id"] != actor_id:
-            raise SubstrateError(
-                ErrorCode.CLAIM_LOST,
-                f"Claim on {work_item_id} is now held by {claim['actor_id']}, not {actor_id}",
-            )
-        if (
-            expected_attempt_number is not None
-            and claim["attempt_number"] != expected_attempt_number
-        ):
-            raise SubstrateError(
-                ErrorCode.CLAIM_LOST,
-                f"Claim attempt_number is {claim['attempt_number']}, "
-                f"expected {expected_attempt_number}",
-            )
+        claim_state = claim if claim is not None else None
 
-        new_expires = datetime.now(UTC) + timedelta(seconds=ttl_seconds)
-        claim["expires_at"] = new_expires
+        result = resolve_heartbeat(
+            claim_state=claim_state,
+            actor_id=actor_id,
+            ttl_seconds=ttl_seconds,
+            expected_attempt_number=expected_attempt_number,
+            work_item_id=work_item_id,
+            now=now,
+        )
+
+        claim["expires_at"] = result.new_expires_at
         wi = self._work_items.get(work_item_id)
         if wi is not None:
-            wi["claim_expires_at"] = new_expires
+            wi["claim_expires_at"] = result.new_expires_at
 
         return Claim(
             work_item_id=work_item_id,
             actor_id=actor_id,
-            acquired_at=claim["acquired_at"],
-            expires_at=new_expires,
-            attempt_number=claim["attempt_number"],
+            acquired_at=result.acquired_at,
+            expires_at=result.new_expires_at,
+            attempt_number=result.attempt_number,
         )
 
     def release_claim(
@@ -917,18 +822,9 @@ class InMemorySubstrate:
         event_id: uuid.UUID | None = None,
         actor_kind: str = "agent",
     ) -> None:
-        _validate_actor_kind(actor_kind)
+        validate_actor_kind(actor_kind)
         claim = self._claims.get(work_item_id)
-        if claim is None:
-            raise SubstrateError(
-                ErrorCode.CLAIM_NOT_FOUND,
-                f"No claim found for work item {work_item_id}",
-            )
-        if claim["actor_id"] != actor_id:
-            raise SubstrateError(
-                ErrorCode.CLAIM_LOST,
-                f"Claim on {work_item_id} is held by {claim['actor_id']}, not {actor_id}",
-            )
+        validate_release(claim, actor_id, work_item_id)
 
         del self._claims[work_item_id]
         wi = self._work_items.get(work_item_id)
@@ -973,7 +869,7 @@ class InMemorySubstrate:
         event_id: uuid.UUID | None = None,
         payload: dict | None = None,
     ) -> Link:
-        _validate_actor_kind(actor_kind)
+        validate_actor_kind(actor_kind)
         if event_id is None:
             event_id = uuid.uuid4()
 
@@ -992,21 +888,12 @@ class InMemorySubstrate:
 
         wf_data = self._workflows.get((from_wi["workflow_name"], from_wi["workflow_version"]))
         if wf_data is not None:
-            allowed = False
-            for lt in wf_data.get("link_types", []):
-                if (
-                    lt["name"] == link_type
-                    and lt["source_type"] == from_wi["work_item_type"]
-                    and lt["target_type"] == to_wi["work_item_type"]
-                ):
-                    allowed = True
-                    break
-            if not allowed:
-                raise SubstrateError(
-                    ErrorCode.LINK_TYPE_NOT_ALLOWED,
-                    f"Link type {link_type!r} not allowed between "
-                    f"{from_wi['work_item_type']!r} and {to_wi['work_item_type']!r}",
-                )
+            validate_link_type(
+                wf_data.get("link_types", []),
+                from_wi["work_item_type"],
+                to_wi["work_item_type"],
+                link_type,
+            )
 
         link_id = uuid.uuid4()
         link_payload = {
@@ -1050,7 +937,7 @@ class InMemorySubstrate:
         *,
         event_id: uuid.UUID | None = None,
     ) -> None:
-        _validate_actor_kind(actor_kind)
+        validate_actor_kind(actor_kind)
         if event_id is None:
             event_id = uuid.uuid4()
 
@@ -1237,29 +1124,19 @@ class InMemorySubstrate:
         *,
         event_id: uuid.UUID | None = None,
     ) -> Event:
-        _validate_actor_kind(actor_kind)
+        validate_actor_kind(actor_kind)
         if event_id is None:
             event_id = uuid.uuid4()
 
         wi = self._work_items.get(work_item_id)
-        if wi is None:
-            raise SubstrateError(
-                ErrorCode.WORK_ITEM_NOT_FOUND,
-                f"Work item {work_item_id} not found",
-            )
+        validate_work_item_exists(wi, work_item_id)
 
-        existing = self._event_id_index.get(event_id)
+        existing = check_idempotency(
+            self._event_id_index.get(event_id),
+            actor_id,
+            "not_before_set",
+        )
         if existing is not None:
-            if existing.actor_id != actor_id:
-                raise SubstrateError(
-                    ErrorCode.IDEMPOTENCY_COLLISION_WITH_DIFFERENT_PAYLOAD,
-                    f"event_id {event_id} already used by actor {existing.actor_id!r}",
-                )
-            if existing.transition != "not_before_set":
-                raise SubstrateError(
-                    ErrorCode.IDEMPOTENCY_COLLISION_WITH_DIFFERENT_PAYLOAD,
-                    f"event_id {event_id} already used with transition {existing.transition!r}",
-                )
             return existing
 
         wi["not_before"] = not_before
@@ -1381,32 +1258,16 @@ class InMemorySubstrate:
                     },
                 )
 
-    def _check_actor_role_authorized(self, actor_id: str, role: str) -> None:
-        """Verify that *actor_id* is authorized for *role*.
-
-        Per FR-24, enforcement only applies to actors with at least one
-        registered role.  If the actor has zero registered roles, the
-        check passes silently.
-        """
-        registered = {r for (aid, r) in self._actor_roles if aid == actor_id}
-        if registered and role not in registered:
-            raise SubstrateError(
-                ErrorCode.ACTOR_ROLE_NOT_AUTHORIZED,
-                f"Actor {actor_id!r} is not authorized for role {role!r}",
-            )
-
     def _check_escalation(self, wi: dict, attempt_number: int) -> bool:
         wf_data = self._workflows.get((wi["workflow_name"], wi["workflow_version"]))
         if wf_data is None:
             return False
         threshold = wf_data.get("attempt_threshold")
-        if threshold is None or attempt_number < threshold:
-            return False
-        existing = any(
+        has_escalated = any(
             e.transition == "escalated"
             for e in self._events.get(wi["work_item_id"], [])
         )
-        if existing:
+        if not should_escalate(threshold, has_escalated, attempt_number):
             return False
         wi["needs_review"] = True
         self._append_claim_event(

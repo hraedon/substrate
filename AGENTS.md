@@ -32,6 +32,7 @@ One Postgres database, one schema per project. The `Substrate` handle owns one l
 src/substrate/
   __init__.py       # Public API: Substrate class
   _connection.py    # Connection pool, schema-per-project
+  _contract.py      # Single-source-of-truth business logic (RFC-062)
   _migrations.py    # Migration runner
   _events.py        # Event append, idempotency, seq allocation
   _work_items.py    # Create, query (FR-05b)
@@ -61,6 +62,9 @@ docker compose -f docker-compose.test.yml up -d
 
 # Run tests
 .venv/bin/python -m pytest tests/ -v
+
+# Run including property-based tests (slow)
+.venv/bin/python -m pytest tests/ -v -m slow
 
 # Lint
 .venv/bin/ruff check src/
@@ -140,11 +144,13 @@ validate_yaml(yaml_string_or_path)                     # -> ValidationResult
 
 ## Status
 
-MVP + Phase 2 + Phase 3 implemented. Production readiness sweep complete. All FRs FR-01 through FR-27 are in tree. 154 tests + 3 scale benchmarks passing across 17 files. All breadcrumbs resolved.
+MVP + Phase 2 + Phase 3 implemented. Production readiness sweep complete. All FRs FR-01 through FR-27 are in tree. 300 tests + 3 scale benchmarks passing across 18 files. All breadcrumbs resolved.
 
 Production readiness additions: migration packaging for pip installs (importlib.resources + force-include), claims_stolen metric wired, actor_kind validation at API boundary, docstrings on all public methods, spec.yaml synced to v4, structured replay error handling.
 
 Phase 3 additions: FR-24 (actor → allowed_roles enforcement, closes BR-09), FR-25 (continue-on-revoked replay flag), FR-26 (update_not_before API), FR-27 (custom field validation at transition time). Migration `005_actor_roles.sql` adds the actor_roles table. ReplayReport gains `warnings` field.
+
+RFC-062: Single-source-of-truth backend contract via `_contract.py` — 20 pure validation/decision functions shared by both Postgres and InMemory backends. Property-based conformance tests via hypothesis in `tests/test_property_conformance.py`.
 
 ## Conventions
 

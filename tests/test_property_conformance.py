@@ -1,0 +1,448 @@
+from __future__ import annotations
+
+import uuid
+from pathlib import Path
+
+import pytest
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
+
+from substrate._errors import SubstrateError
+from substrate.testing import InMemorySubstrate, drop_project_schema
+
+TESTS_DIR = Path(__file__).parent
+DSN = "postgresql://substrate_test:substrate_test@localhost:5432/substrate_test"
+KEY_PATH = str(TESTS_DIR / "test_keys.json")
+WORKFLOW_PATH = str(TESTS_DIR / "test_workflow.yaml")
+WORKFLOW_YAML = Path(WORKFLOW_PATH).read_text()
+
+VALID_TYPES = ["feature", "bug"]
+VALID_TRANSITIONS = {
+    "new": [("start", "agent")],
+    "in_progress": [("submit_review", "agent")],
+    "review": [("approve", "reviewer"), ("reject", "reviewer")],
+    "done": [],
+}
+ACTOR_IDS = ["agent-1", "agent-2", "reviewer-1"]
+ROLES = ["agent", "reviewer"]
+ACTOR_ROLE_MAP = {"agent-1": "agent", "agent-2": "agent", "reviewer-1": "reviewer"}
+
+
+@st.composite
+def operation(draw):
+    kind = draw(
+        st.sampled_from(
+            [
+                "create",
+                "claim",
+                "transition",
+                "release",
+                "sweep",
+                "heartbeat",
+                "append_event",
+            ]
+        )
+    )
+    if kind == "create":
+        return {
+            "op": "create",
+            "work_item_type": draw(st.sampled_from(VALID_TYPES)),
+            "actor_id": draw(st.sampled_from(ACTOR_IDS)),
+            "title": draw(st.text(min_size=1, max_size=20)),
+        }
+    if kind == "claim":
+        return {
+            "op": "claim",
+            "idx": draw(st.integers(min_value=0, max_value=5)),
+            "actor_id": draw(st.sampled_from(ACTOR_IDS)),
+            "ttl": draw(st.integers(min_value=60, max_value=600)),
+        }
+    if kind == "transition":
+        return {
+            "op": "transition",
+            "idx": draw(st.integers(min_value=0, max_value=5)),
+            "actor_id": draw(st.sampled_from(ACTOR_IDS)),
+        }
+    if kind == "release":
+        return {
+            "op": "release",
+            "idx": draw(st.integers(min_value=0, max_value=5)),
+            "actor_id": draw(st.sampled_from(ACTOR_IDS)),
+        }
+    if kind == "sweep":
+        return {"op": "sweep"}
+    if kind == "heartbeat":
+        return {
+            "op": "heartbeat",
+            "idx": draw(st.integers(min_value=0, max_value=5)),
+            "actor_id": draw(st.sampled_from(ACTOR_IDS)),
+            "ttl": draw(st.integers(min_value=60, max_value=600)),
+        }
+    if kind == "append_event":
+        return {
+            "op": "append_event",
+            "idx": draw(st.integers(min_value=0, max_value=5)),
+            "actor_id": draw(st.sampled_from(ACTOR_IDS)),
+            "transition": draw(st.none() | st.text(min_size=1, max_size=10)),
+        }
+    return {"op": "sweep"}
+
+
+def _exec_op(backend, op, work_items):
+    if op["op"] == "create":
+        role = ACTOR_ROLE_MAP.get(op["actor_id"], "agent")
+        actor_metadata = {"role": role}
+        if op["work_item_type"] == "feature":
+            custom_fields = {"title": op["title"]}
+        elif op["work_item_type"] == "bug":
+            custom_fields = {"severity": "minor"}
+        else:
+            custom_fields = {}
+        try:
+            wi, _evt = backend.create_work_item(
+                workflow_name="test_workflow",
+                work_item_type=op["work_item_type"],
+                actor_id=op["actor_id"],
+                actor_metadata=actor_metadata,
+                custom_fields=custom_fields,
+            )
+            work_items.append(wi)
+            return ("ok", "created", str(wi.work_item_id))
+        except SubstrateError as e:
+            return ("err", e.code)
+
+    idx = op.get("idx", 0)
+    if idx >= len(work_items):
+        return ("noop", "no_target")
+    wi = work_items[idx]
+    wi_id = wi.work_item_id
+
+    if op["op"] == "claim":
+        try:
+            claim = backend.acquire_claim(
+                wi_id, op["actor_id"], ttl_seconds=op["ttl"]
+            )
+            refreshed = backend.get_work_item(wi_id)
+            if refreshed:
+                work_items[idx] = refreshed
+            return ("ok", "claimed", str(claim.attempt_number))
+        except SubstrateError as e:
+            return ("err", e.code)
+
+    if op["op"] == "heartbeat":
+        try:
+            claim = backend.heartbeat_claim(
+                wi_id, op["actor_id"], ttl_seconds=op["ttl"]
+            )
+            return ("ok", "heartbeat", str(claim.attempt_number))
+        except SubstrateError as e:
+            return ("err", e.code)
+
+    if op["op"] == "release":
+        try:
+            backend.release_claim(wi_id, op["actor_id"])
+            refreshed = backend.get_work_item(wi_id)
+            if refreshed:
+                work_items[idx] = refreshed
+            return ("ok", "released")
+        except SubstrateError as e:
+            return ("err", e.code)
+
+    if op["op"] == "sweep":
+        try:
+            count = backend.sweep_expired_claims()
+            return ("ok", "swept", count)
+        except SubstrateError as e:
+            return ("err", e.code)
+
+    if op["op"] == "transition":
+        current_state = wi.current_state
+        valid = VALID_TRANSITIONS.get(current_state, [])
+        role = ACTOR_ROLE_MAP.get(op["actor_id"], "agent")
+        matching = [(t, r) for t, r in valid if r == role]
+        if not matching:
+            if valid:
+                t_name, t_role = valid[0]
+            else:
+                return ("noop", "terminal")
+        else:
+            t_name, t_role = matching[0]
+        try:
+            backend.transition(
+                wi_id,
+                t_name,
+                op["actor_id"],
+                actor_metadata={"role": t_role},
+            )
+            refreshed = backend.get_work_item(wi_id)
+            if refreshed:
+                work_items[idx] = refreshed
+            return ("ok", "transitioned", t_name)
+        except SubstrateError as e:
+            return ("err", e.code)
+
+    if op["op"] == "append_event":
+        try:
+            backend.append_event(
+                wi_id,
+                op["actor_id"],
+                transition=op.get("transition"),
+            )
+            return ("ok", "appended")
+        except SubstrateError as e:
+            return ("err", e.code)
+
+    return ("noop", "unknown")
+
+
+def _compare_state(real_items, mem_items):
+    assert len(real_items) == len(mem_items), (
+        f"Work item count mismatch: real={len(real_items)} mem={len(mem_items)}"
+    )
+    for i, (r, m) in enumerate(zip(real_items, mem_items)):
+        assert r.current_state == m.current_state, (
+            f"[{i}] State mismatch: real={r.current_state} mem={m.current_state}"
+        )
+        assert r.custom_fields == m.custom_fields, (
+            f"[{i}] Fields mismatch: real={r.custom_fields} mem={m.custom_fields}"
+        )
+        assert r.needs_review == m.needs_review, (
+            f"[{i}] needs_review mismatch: real={r.needs_review} mem={m.needs_review}"
+        )
+        assert r.attempt_number == m.attempt_number, (
+            f"[{i}] attempt_number mismatch: "
+            f"real={r.attempt_number} mem={m.attempt_number}"
+        )
+        assert r.workflow_version == m.workflow_version
+        assert r.work_item_type == m.work_item_type
+
+
+@pytest.mark.slow
+class TestPropertyBasedConformance:
+    @settings(
+        max_examples=150,
+        deadline=None,
+        suppress_health_check=[HealthCheck.too_slow],
+    )
+    @given(ops=st.lists(operation(), max_size=30))
+    def test_random_sequences_equivalent(self, ops):
+        from substrate import Substrate
+
+        project = f"prop_{uuid.uuid4().hex[:8]}"
+        real = Substrate.create_project(DSN, project, KEY_PATH)
+        real.register_workflow(WORKFLOW_YAML)
+        mem = InMemorySubstrate(project="test")
+        mem.register_workflow(WORKFLOW_YAML)
+
+        real_items = []
+        mem_items = []
+
+        try:
+            for op in ops:
+                real_result = _exec_op(real, op, real_items)
+                mem_result = _exec_op(mem, op, mem_items)
+                assert real_result[0] == mem_result[0], (
+                    f"Op {op['op']} diverged: real={real_result} mem={mem_result}"
+                )
+                if real_result[0] == "err":
+                    assert real_result[1] == mem_result[1], (
+                        f"Error code diverged for {op['op']}: "
+                        f"real={real_result[1]} mem={mem_result[1]}"
+                    )
+
+            if real_items and mem_items:
+                _compare_state(real_items, mem_items)
+        finally:
+            real.close()
+            drop_project_schema(DSN, project)
+
+    @settings(
+        max_examples=50,
+        deadline=None,
+        suppress_health_check=[HealthCheck.too_slow],
+    )
+    @given(
+        claim_ops=st.lists(
+            st.fixed_dictionaries(
+                {
+                    "op": st.just("claim"),
+                    "actor_id": st.sampled_from(ACTOR_IDS),
+                    "ttl": st.integers(min_value=60, max_value=600),
+                }
+            ),
+            max_size=10,
+        )
+    )
+    def test_claim_contention_sequence(self, claim_ops):
+        from substrate import Substrate
+
+        project = f"prop_claim_{uuid.uuid4().hex[:8]}"
+        real = Substrate.create_project(DSN, project, KEY_PATH)
+        real.register_workflow(WORKFLOW_YAML)
+        mem = InMemorySubstrate(project="test")
+        mem.register_workflow(WORKFLOW_YAML)
+
+        try:
+            real_wi, _ = real.create_work_item(
+                "test_workflow", "feature", "agent-1",
+                actor_metadata={"role": "agent"},
+                custom_fields={"title": "test"},
+            )
+            mem_wi, _ = mem.create_work_item(
+                "test_workflow", "feature", "agent-1",
+                actor_metadata={"role": "agent"},
+                custom_fields={"title": "test"},
+            )
+
+            for op in claim_ops:
+                real_r = _safe_claim(real, real_wi.work_item_id, op["actor_id"], op["ttl"])
+                mem_r = _safe_claim(mem, mem_wi.work_item_id, op["actor_id"], op["ttl"])
+                assert real_r[0] == mem_r[0], (
+                    f"Claim diverged: real={real_r} mem={mem_r}"
+                )
+                if real_r[0] == "ok":
+                    assert real_r[1].attempt_number == mem_r[1].attempt_number
+
+            real_refreshed = real.get_work_item(real_wi.work_item_id)
+            mem_refreshed = mem.get_work_item(mem_wi.work_item_id)
+            assert real_refreshed.attempt_number == mem_refreshed.attempt_number
+            assert real_refreshed.needs_review == mem_refreshed.needs_review
+        finally:
+            real.close()
+            drop_project_schema(DSN, project)
+
+    @settings(max_examples=50, deadline=None)
+    @given(
+        n_claims=st.integers(min_value=1, max_value=5),
+    )
+    def test_escalation_equivalence(self, n_claims):
+        from substrate import Substrate
+
+        project = f"prop_esc_{uuid.uuid4().hex[:8]}"
+        real = Substrate.create_project(DSN, project, KEY_PATH)
+        real.register_workflow(WORKFLOW_YAML)
+        mem = InMemorySubstrate(project="test")
+        mem.register_workflow(WORKFLOW_YAML)
+
+        try:
+            real_wi, _ = real.create_work_item(
+                "test_workflow", "feature", "agent-1",
+                actor_metadata={"role": "agent"},
+                custom_fields={"title": "test"},
+            )
+            mem_wi, _ = mem.create_work_item(
+                "test_workflow", "feature", "agent-1",
+                actor_metadata={"role": "agent"},
+                custom_fields={"title": "test"},
+            )
+
+            actors = ["agent-1", "agent-2"]
+            for i in range(n_claims):
+                actor = actors[i % len(actors)]
+                _safe_claim(real, real_wi.work_item_id, actor, 1)
+                _safe_claim(mem, mem_wi.work_item_id, actor, 1)
+                _safe_release(real, real_wi.work_item_id, actor)
+                _safe_release(mem, mem_wi.work_item_id, actor)
+
+            real_r = real.get_work_item(real_wi.work_item_id)
+            mem_r = mem.get_work_item(mem_wi.work_item_id)
+            assert real_r.attempt_number == mem_r.attempt_number
+            assert real_r.needs_review == mem_r.needs_review
+        finally:
+            real.close()
+            drop_project_schema(DSN, project)
+
+    @settings(max_examples=50, deadline=None)
+    @given(data=st.data())
+    def test_transition_sequence_equivalence(self, data):
+        from substrate import Substrate
+
+        project = f"prop_trans_{uuid.uuid4().hex[:8]}"
+        real = Substrate.create_project(DSN, project, KEY_PATH)
+        real.register_workflow(WORKFLOW_YAML)
+        mem = InMemorySubstrate(project="test")
+        mem.register_workflow(WORKFLOW_YAML)
+
+        try:
+            real_wi, _ = real.create_work_item(
+                "test_workflow", "feature", "agent-1",
+                actor_metadata={"role": "agent"},
+                custom_fields={"title": "test"},
+            )
+            mem_wi, _ = mem.create_work_item(
+                "test_workflow", "feature", "agent-1",
+                actor_metadata={"role": "agent"},
+                custom_fields={"title": "test"},
+            )
+
+            transitions = [
+                ("start", "agent"),
+                ("submit_review", "agent"),
+                ("approve", "reviewer"),
+            ]
+            for t_name, t_role in transitions:
+                actor = "agent-1" if t_role == "agent" else "reviewer-1"
+                real_evt = real.transition(
+                    real_wi.work_item_id, t_name, actor,
+                    actor_metadata={"role": t_role},
+                )
+                mem_evt = mem.transition(
+                    mem_wi.work_item_id, t_name, actor,
+                    actor_metadata={"role": t_role},
+                )
+                assert real_evt.transition == mem_evt.transition
+
+            real_r = real.get_work_item(real_wi.work_item_id)
+            mem_r = mem.get_work_item(mem_wi.work_item_id)
+            assert real_r.current_state == mem_r.current_state
+            assert real_r.workflow_version == mem_r.workflow_version
+        finally:
+            real.close()
+            drop_project_schema(DSN, project)
+
+    @settings(max_examples=30, deadline=None)
+    @given(
+        ops=st.lists(operation(), max_size=20),
+    )
+    def test_replay_equivalence(self, ops):
+        from substrate import Substrate
+
+        project = f"prop_replay_{uuid.uuid4().hex[:8]}"
+        real = Substrate.create_project(DSN, project, KEY_PATH)
+        real.register_workflow(WORKFLOW_YAML)
+        mem = InMemorySubstrate(project="test")
+        mem.register_workflow(WORKFLOW_YAML)
+
+        real_items = []
+        mem_items = []
+
+        try:
+            for op in ops:
+                _exec_op(real, op, real_items)
+                _exec_op(mem, op, mem_items)
+
+            if real_items:
+                real_report = real.replay()
+                mem_report = mem.replay()
+                assert real_report.replayed_drift == mem_report.replayed_drift, (
+                    f"Drift mismatch: real={real_report.replayed_drift} "
+                    f"mem={mem_report.replayed_drift}"
+                )
+        finally:
+            real.close()
+            drop_project_schema(DSN, project)
+
+
+def _safe_claim(backend, wi_id, actor_id, ttl):
+    try:
+        claim = backend.acquire_claim(wi_id, actor_id, ttl_seconds=ttl)
+        return ("ok", claim)
+    except SubstrateError as e:
+        return ("err", e.code)
+
+
+def _safe_release(backend, wi_id, actor_id):
+    try:
+        backend.release_claim(wi_id, actor_id)
+    except SubstrateError:
+        pass

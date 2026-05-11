@@ -3,6 +3,7 @@ from __future__ import annotations
 import psycopg
 from psycopg.sql import SQL
 
+from ._contract import check_actor_role_authorized as _check_roles
 from ._errors import ErrorCode, SubstrateError
 
 
@@ -72,31 +73,11 @@ def check_actor_role_authorized(
     actor_id: str,
     claimed_role: str,
 ) -> None:
-    """Verify that *actor_id* is authorized for *claimed_role*.
-
-    Per FR-24, enforcement only applies to actors with at least one
-    registered role.  If the actor has **zero** entries in
-    ``actor_roles``, the check passes silently — the actor is assumed
-    to be outside the RBAC surface and is trusted based on the
-    workflow's ``allowed_roles`` check alone.
-    """
     rows = conn.execute(
         SQL(
             "SELECT role FROM actor_roles WHERE actor_id = %s"
         ),
         [actor_id],
     ).fetchall()
-    if not rows:
-        return
-    allowed = {r["role"] for r in rows}
-    if claimed_role not in allowed:
-        raise SubstrateError(
-            ErrorCode.ACTOR_ROLE_NOT_AUTHORIZED,
-            f"Actor {actor_id!r} is not authorized for role {claimed_role!r}. "
-            f"Allowed roles: {sorted(allowed)}",
-            detail={
-                "actor_id": actor_id,
-                "claimed_role": claimed_role,
-                "allowed_roles": sorted(allowed),
-            },
-        )
+    registered = {r["role"] for r in rows}
+    _check_roles(registered, actor_id, claimed_role)

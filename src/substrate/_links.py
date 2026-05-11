@@ -5,6 +5,7 @@ import uuid
 import psycopg
 from psycopg.sql import SQL
 
+from ._contract import validate_link_type as _validate_link_type_contract
 from ._errors import ErrorCode, SubstrateError
 from ._events import append_event
 from ._keys import KeySet
@@ -32,21 +33,12 @@ def _validate_link_type(
             f"Workflow {workflow_name!r} version {workflow_version} not registered",
         )
 
-    defn = row["definition"]
-    allowed = False
-    for lt in defn.get("link_types", []):
-        if (
-            lt["name"] == link_type
-            and lt["source_type"] == from_type
-            and lt["target_type"] == to_type
-        ):
-            allowed = True
-            break
-    if not allowed:
-        raise SubstrateError(
-            ErrorCode.LINK_TYPE_NOT_ALLOWED,
-            f"Link type {link_type!r} not allowed between {from_type!r} and {to_type!r}",
-        )
+    _validate_link_type_contract(
+        row["definition"].get("link_types", []),
+        from_type,
+        to_type,
+        link_type,
+    )
 
 
 def create_link(

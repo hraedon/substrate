@@ -9,6 +9,24 @@ import psycopg.types.json
 import structlog
 
 from ._connection import ConnectionManager
+from ._contract import (
+    check_append_blocked as _check_append_blocked,
+)
+from ._contract import (
+    check_role_gating as _check_role_gating,
+)
+from ._contract import (
+    resolve_transition as _resolve_transition,
+)
+from ._contract import (
+    validate_actor_kind as _validate_actor_kind,
+)
+from ._contract import (
+    validate_read_events_filters as _validate_read_events_filters,
+)
+from ._contract import (
+    validate_ttl as _validate_ttl,
+)
 from ._errors import ErrorCode, SubstrateError
 from ._events import (
     append_event as _append_event,
@@ -61,16 +79,6 @@ from ._workflow import parse_file as parse_file
 from ._workflow import validate_yaml as validate_yaml
 
 log = structlog.get_logger()
-
-_VALID_ACTOR_KINDS = {"agent", "human", "system"}
-
-
-def _validate_actor_kind(actor_kind: str) -> None:
-    if actor_kind not in _VALID_ACTOR_KINDS:
-        raise SubstrateError(
-            ErrorCode.INVALID_ACTOR_KIND,
-            f"Invalid actor_kind {actor_kind!r}. Must be one of {sorted(_VALID_ACTOR_KINDS)}",
-        )
 
 
 class Substrate:
@@ -473,14 +481,11 @@ class Substrate:
                         [wi_row["workflow_name"], wi_row["workflow_version"]],
                     ).fetchone()
                     if wf_data is not None:
-                        for t in wf_data["definition"].get("transitions", []):
-                            if t["name"] == transition:
-                                raise SubstrateError(
-                                    ErrorCode.TRANSITION_VIA_APPEND_BLOCKED,
-                                    f"Transition {transition!r} is defined in workflow "
-                                    f"{wi_row['workflow_name']!r}. "
-                                    f"Use Substrate.transition() instead.",
-                                )
+                        _check_append_blocked(
+                            wf_data["definition"].get("transitions", []),
+                            transition,
+                            wi_row["workflow_name"],
+                        )
 
                 evt = _append_event(
                     conn,
@@ -575,27 +580,21 @@ class Substrate:
                     )
 
                 defn = wf_data["definition"]
-                transition_def = None
-                for t in defn.get("transitions", []):
-                    if t["name"] == transition_name and t["from_state"] == wi_row["current_state"]:
-                        transition_def = t
-                        break
+                transition_def = _resolve_transition(
+                    defn.get("transitions", []),
+                    wi_row["current_state"],
+                    transition_name,
+                    wi_row["workflow_name"],
+                    wi_row["workflow_version"],
+                )
 
-                if transition_def is None:
-                    raise SubstrateError(
-                        ErrorCode.INVALID_TRANSITION,
-                        f"Transition {transition_name!r} not valid from state "
-                        f"{wi_row['current_state']!r} in {wi_row['workflow_name']!r} "
-                        f"v{wi_row['workflow_version']}",
-                    )
-
+                _check_role_gating(
+                    transition_def.get("allowed_roles", []),
+                    actor_metadata,
+                    transition_name,
+                )
                 if transition_def.get("allowed_roles"):
                     role = (actor_metadata or {}).get("role")
-                    if role not in transition_def["allowed_roles"]:
-                        raise SubstrateError(
-                            ErrorCode.ROLE_NOT_PERMITTED,
-                            f"Role {role!r} not permitted for transition {transition_name!r}",
-                        )
                     from ._actor_roles import check_actor_role_authorized
                     check_actor_role_authorized(conn, actor_id, role)
 
@@ -723,16 +722,7 @@ class Substrate:
         Raises:
             SubstrateError: ``INVALID_FILTER``.
         """
-        if before_seq is not None and work_item_id is None:
-            raise SubstrateError(
-                ErrorCode.INVALID_FILTER,
-                "before_seq requires work_item_id",
-            )
-        if (start is None) != (end is None):
-            raise SubstrateError(
-                ErrorCode.INVALID_FILTER,
-                "start and end must be provided together",
-            )
+        _validate_read_events_filters(before_seq, work_item_id, start, end)
         from ._events import read_events_composite
 
         with self._mgr.transaction() as conn:
@@ -862,11 +852,7 @@ class Substrate:
                 ``WORK_ITEM_NOT_FOUND``, ``INVALID_ARGUMENT``.
         """
         _validate_actor_kind(actor_kind)
-        if ttl_seconds <= 0:
-            raise SubstrateError(
-                ErrorCode.INVALID_ARGUMENT,
-                "ttl_seconds must be positive",
-            )
+        _validate_ttl(ttl_seconds)
         from ._claims import acquire_claim as _acquire
 
         timer = OpTimer(self._project, "acquire_claim")
@@ -917,11 +903,7 @@ class Substrate:
             SubstrateError: ``CLAIM_LOST``, ``CLAIM_NOT_FOUND``,
                 ``INVALID_ARGUMENT``.
         """
-        if ttl_seconds <= 0:
-            raise SubstrateError(
-                ErrorCode.INVALID_ARGUMENT,
-                "ttl_seconds must be positive",
-            )
+        _validate_ttl(ttl_seconds)
         from ._claims import heartbeat_claim as _heartbeat
 
         timer = OpTimer(self._project, "heartbeat_claim")

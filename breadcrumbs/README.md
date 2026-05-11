@@ -31,17 +31,14 @@ No open breadcrumbs.
 
 ## RFCs (awaiting future work)
 
-RFC breadcrumbs use the `RFC-` prefix to distinguish design proposals that cannot be acted on until later phases. They are candidates for improvement, not actionable defects.
-
-| # | Title | Severity | Phase Needed |
-|---|---|---|---|
-| RFC-062 | Single-source-of-truth backend contract — eliminate hand-maintained InMemorySubstrate parity | high | Phase 4+ or dedicated infrastructure sprint |
+No pending RFCs. All RFCs have been resolved.
 
 ## Resolved
 
 | # | Title | Severity | Resolution |
 |---|---|---|---|
 | 063 | Add optional prompt_template_hash field to ActorMetadata | low | Added `prompt_template_hash: str | None = None` to `ActorMetadata`; round-trip via `to_dict`/`from_dict`; 5 tests in `test_actor_metadata_contract.py` |
+| 062 | Single-source-of-truth backend contract — eliminate hand-maintained InMemorySubstrate parity | high | Added `_contract.py` with 20 pure validation/decision functions; both backends refactored to delegate; 5 property-based conformance tests via hypothesis (Option A + B) |
 | 061 | Provide a workflow-yaml validator that does not require a live database | low | Added `validate_yaml(path_or_string) -> ValidationResult` to `_workflow.py`; exposed via `substrate.validate_yaml` and `substrate.testing.validate_yaml`; 11 tests in `test_validate_yaml.py` |
 | 060 | Canonical diagnostic-payload shape for transition events | low | Accepted as documentation convention; added "Diagnostic payload shape" pattern to AGENTS.md |
 | 058 | Claim lifecycle events misattribute actor_kind as "system" for actor-triggered operations | low | Added `actor_kind` param (default `"agent"`) to `acquire_claim` and `release_claim` in both backends and public API; claim events now use caller's `actor_kind` |

@@ -4,6 +4,45 @@ Structured log of development sessions and milestones.
 
 ---
 
+## 2026-05-11 — Session 19: RFC-062 single-source-of-truth backend contract
+
+**Focus:** Implement RFC-062 — declarative backend contract + property-based conformance testing.
+
+**Delivered:**
+
+1. **`_contract.py` (Option B)** — New module with 20 pure validation/decision functions extracted from both backends:
+   - `validate_actor_kind`, `validate_ttl`, `validate_not_before` — input validation
+   - `resolve_transition` — find matching transition from workflow definition
+   - `check_role_gating`, `check_actor_role_authorized` — role enforcement (FR-12, FR-24)
+   - `check_append_blocked` — FR-11 enforcement
+   - `check_idempotency`, `check_expected_seq` — event safety
+   - `validate_link_type` — link type enforcement
+   - `should_escalate` — escalation decision (FR-10)
+   - `resolve_claim_acquire` — pure claim acquisition decision engine
+   - `resolve_heartbeat`, `validate_release` — claim lifecycle
+   - `validate_read_events_filters` — filter validation
+   - `validate_work_item_exists` — existence guard
+   - Result types: `ClaimAcquireResult`, `HeartbeatResult`
+
+2. **`_in_memory.py` refactored** — All inline validation replaced with `_contract` calls. Removed duplicated `_validate_actor_kind`, inline transition resolution, inline role gating, inline claim decision logic, inline escalation check.
+
+3. **Postgres backend refactored** — Updated `__init__.py`, `_claims.py`, `_links.py`, `_actor_roles.py` to delegate to `_contract` functions. All inline validation logic replaced.
+
+4. **Property-based conformance tests (Option A)** — `tests/test_property_conformance.py` with 5 hypothesis-driven test classes:
+   - `test_random_sequences_equivalent` — 150 random API call sequences compared between backends
+   - `test_claim_contention_sequence` — multi-actor claim contention scenarios
+   - `test_escalation_equivalence` — claim/steal escalation threshold testing
+   - `test_transition_sequence_equivalence` — full workflow lifecycle comparison
+   - `test_replay_equivalence` — replay drift comparison after random operations
+
+5. **Added `hypothesis>=6.100` to dev dependencies** in `pyproject.toml`.
+
+**Breadcrumbs resolved:** RFC-062.
+
+**Test Results:** 300 passed (295 existing + 5 new property-based), lint clean.
+
+---
+
 ## 2026-05-08 — Session 18: Breadcrumb closeout sweep (BC-060, BC-061, RFC-033/034/035/047/053)
 
 **Focus:** Resolve all remaining open breadcrumbs and RFCs.
