@@ -27,30 +27,34 @@ related: ["002", "003"]
 
 ## Deferred
 
-| 083 | No uniqueness checks on state/transition/type names | medium | [deferred/083](deferred/083-no-uniqueness-checks-on-names.md) |
-| 082 | Default values not type-checked at registration | medium | [deferred/082](deferred/082-default-values-not-type-checked.md) |
-| 079 | Replay skips work items with zero events silently | medium | [deferred/079](deferred/079-replay-skips-zero-event-work-items.md) |
-| 074 | continue_on_revoked=True skips signature verification entirely | high | [deferred/074](deferred/074-continue-on-revoked-skips-signature.md) |
-| 070 | Replay temp tables accumulate between replay() calls | low | [deferred/070](deferred/070-replay-temp-table-accumulation.md) |
-| 068 | validate_field_values takes WorkflowDefinition but validate_field_update takes raw dict | low | [deferred/068](deferred/068-inconsistent-workflow-param-types.md) |
-| 065 | HookConsumer nested transaction risk with append_event under savepoints | low | [deferred/065](deferred/065-hook-savepoint-deadlock.md) |
+_(none)_
 
 ## Open
 
-| # | Title | Severity | Tags |
-|---|---|---|---|
-| 100 | HMAC key material held in plaintext Python memory | critical | security, fr-15 |
-| 101 | actor_metadata role claim is self-attested without independent verification | critical | security, fr-12, fr-24, br-09 |
-| 102 | No rate limiting on any public API endpoint | critical | security, denial-of-service |
-| 103 | Client-supplied event_id not validated as UUIDv4; no entropy guarantees | critical | idempotency, fr-03 |
-| 104 | expected_event_seq missing from create_link and remove_link — TOCTOU race | high | concurrency, br-10 |
-| 105 | Replay skip of revoked-key events with continue_on_revoked=True leaves bad events in log | high | security, replay, fr-25 |
-| 106 | Unbounded not_before allows permanent work-item DOS | high | denial-of-service, fr-26 |
+_(none)_
 
 ## Resolved
 
 | # | Title | Severity | Resolution |
 |---|---|---|---|
+| 083 | No uniqueness checks on state/transition/type names | medium | Accepted — deduplication is deterministic; error surfaces at runtime |
+| 082 | Default values not type-checked at workflow registration | medium | Accepted — late validation surfaces error at creation time |
+| 079 | Replay skips work items with zero events silently | medium | Accepted — zero-event items are already corrupt beyond replay's scope |
+| 074 | continue_on_revoked=True skips signature verification entirely | high | Fixed; separated key lookup from status check; revoked keys now verify signature, only unknown keys skip |
+| 070 | Replay temp tables accumulate between replay() calls | low | Accepted — tables cleaned at next replay; dropping would break API contract |
+| 068 | validate_field_values takes WorkflowDefinition but validate_field_update takes raw dict | low | Accepted — raw dict avoids allocation in hot transition path |
+| 065 | HookConsumer nested transaction risk with append_event under savepoints | low | Accepted — nested savepoints are standard Postgres; low probability in practice |
+| 111 | JSON Schema permits additionalProperties:true everywhere — workflow isolation unclear | medium | Rejected — false alarm; schema already has `additionalProperties: false` at every level |
+| 110 | custom_fields merge in append_transition_event is shallow, not deep | medium | Accepted — shallow merge by design; predictable, consumers include full nested structures |
+| 109 | synchronous_commit configure callback raises silently on connection failure | medium | Rejected — false alarm; psycopg pool discards connections if configure raises |
+| 107 | validate_work_item_refs propagates unhandled ValueError from uuid.UUID() | medium | Fixed; wrapped in try/except, raises `SubstrateError(CUSTOM_FIELD_VIOLATION)` |
+| 106 | Unbounded not_before allows permanent work-item DOS | high | Fixed; added `validate_not_before_delta()` with 365-day max |
+| 105 | Replay skip of revoked-key events with continue_on_revoked=True leaves bad events in log | high | Accepted — events are immutable audit trail by design |
+| 104 | expected_event_seq missing from create_link and remove_link — TOCTOU race | high | Accepted — FOR UPDATE lock provides adequate serialization |
+| 103 | Client-supplied event_id not validated as UUIDv4; no entropy guarantees | critical | Fixed; added `validate_event_id()` checking version nibble; wired into all public API methods |
+| 102 | No rate limiting on any public API endpoint | critical | Accepted — out of scope; library not daemon |
+| 101 | actor_metadata role claim is self-attested without independent verification | critical | Accepted — by design per BR-09 and trust tier definitions |
+| 100 | HMAC key material held in plaintext Python memory | critical | Accepted — environmental trust boundary; inherent to in-process HMAC |
 | 099 | InMemorySubstrate.release_claim can raise KeyError on concurrent sweep | medium | Changed `del` to `.pop(work_item_id, None)` |
 | 098 | claimable_now filter uses transaction-time now() instead of statement-time | medium | Documented as design choice; `clock_timestamp()` alternative noted in spec |
 | 097 | drop_project_schema does not validate project name before executing DROP SCHEMA | medium | `validate_project_name()` now called before any SQL is executed |

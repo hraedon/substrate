@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Callable
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 import psycopg.types.json
@@ -23,6 +23,12 @@ from ._contract import (
 )
 from ._contract import (
     validate_actor_kind as _validate_actor_kind,
+)
+from ._contract import (
+    validate_event_id as _validate_event_id,
+)
+from ._contract import (
+    validate_not_before_delta as _validate_not_before_delta,
 )
 from ._contract import (
     validate_read_events_filters as _validate_read_events_filters,
@@ -407,6 +413,8 @@ class Substrate:
         timer = OpTimer(self._project, "create_work_item")
         try:
             _validate_actor_kind(actor_kind)
+            if event_id is not None:
+                _validate_event_id(event_id)
             from ._work_items import create_work_item as _create
 
             with self._mgr.transaction() as conn:
@@ -472,6 +480,8 @@ class Substrate:
             _validate_actor_kind(actor_kind)
             if event_id is None:
                 event_id = uuid.uuid4()
+            else:
+                _validate_event_id(event_id)
 
             with self._mgr.transaction() as conn:
                 wi_row = conn.execute(
@@ -565,6 +575,8 @@ class Substrate:
             _validate_actor_kind(actor_kind)
             if event_id is None:
                 event_id = uuid.uuid4()
+            else:
+                _validate_event_id(event_id)
 
             with self._mgr.transaction() as conn:
                 wi_row = conn.execute(
@@ -865,6 +877,8 @@ class Substrate:
         """
         _validate_actor_kind(actor_kind)
         _validate_ttl(ttl_seconds)
+        if event_id is not None:
+            _validate_event_id(event_id)
         from ._claims import acquire_claim as _acquire
 
         timer = OpTimer(self._project, "acquire_claim")
@@ -952,6 +966,8 @@ class Substrate:
             SubstrateError: ``CLAIM_LOST``, ``CLAIM_NOT_FOUND``.
         """
         _validate_actor_kind(actor_kind)
+        if event_id is not None:
+            _validate_event_id(event_id)
         from ._claims import release_claim as _release
 
         timer = OpTimer(self._project, "release_claim")
@@ -1014,6 +1030,8 @@ class Substrate:
         timer = OpTimer(self._project, "create_link")
         try:
             _validate_actor_kind(actor_kind)
+            if event_id is not None:
+                _validate_event_id(event_id)
             with self._mgr.transaction() as conn:
                 link = _create(
                     conn,
@@ -1065,6 +1083,8 @@ class Substrate:
         timer = OpTimer(self._project, "remove_link")
         try:
             _validate_actor_kind(actor_kind)
+            if event_id is not None:
+                _validate_event_id(event_id)
             with self._mgr.transaction() as conn:
                 _remove(
                     conn,
@@ -1208,6 +1228,11 @@ class Substrate:
             _validate_actor_kind(actor_kind)
             if event_id is None:
                 event_id = uuid.uuid4()
+            else:
+                _validate_event_id(event_id)
+
+            if not_before is not None:
+                _validate_not_before_delta(not_before, datetime.now(UTC))
 
             with self._mgr.transaction() as conn:
                 wi = _lock(conn, work_item_id)
@@ -1221,6 +1246,7 @@ class Substrate:
 
                 existing = _check_idem(
                     conn, event_id, actor_id=actor_id, transition="not_before_set",
+                    work_item_id=work_item_id,
                 )
                 if existing is not None:
                     return existing

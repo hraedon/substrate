@@ -322,7 +322,14 @@ def validate_work_item_refs(
         if value is None:
             continue
 
-        ref_uuid = uuid.UUID(value)
+        try:
+            ref_uuid = uuid.UUID(value)
+        except ValueError:
+            raise SubstrateError(
+                ErrorCode.CUSTOM_FIELD_VIOLATION,
+                f"Field {field_def['name']!r} contains invalid UUID: {value!r}",
+                detail={"field": field_def["name"], "value": value},
+            )
         target_type = field_def.get("target_work_item_type")
 
         row = conn.execute(

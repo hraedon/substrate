@@ -269,7 +269,7 @@ def append_transition_event(
             workflow_name,
             workflow_version,
             transition_name,
-            psycopg.types.json.Jsonb(stored_payload) if stored_payload else None,
+            psycopg.types.json.Jsonb(stored_payload) if stored_payload is not None else None,
             canonical_hash,
             signature,
             canonical_envelope,

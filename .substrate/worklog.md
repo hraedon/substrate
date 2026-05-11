@@ -4,6 +4,33 @@ Structured log of development sessions and milestones.
 
 ---
 
+## 2026-05-11 — Session 22: Minimax breadcrumb triage + codebase audit
+
+**Focus:** Resolve all Minimax breadcrumbs, audit for additional issues, update spec.
+
+**Delivered:**
+
+1. **Triage BC-100–111** — Assessed all 12 pending breadcrumbs. Accepted/rejected 9 as false alarms or by-design. Fixed 3 real bugs:
+   - BC-103 (critical): Added `validate_event_id()` checking UUIDv4 version nibble; wired into all 8 public API methods accepting `event_id`.
+   - BC-106 (high): Added `validate_not_before_delta()` with 365-day max in `_contract.py`; wired into `update_not_before`.
+   - BC-107 (medium): Wrapped `uuid.UUID(value)` in try/except in `validate_work_item_refs` (`_workflow.py:325`).
+
+2. **Resolved deferred breadcrumbs** — Closed 6 deferred items (BC-065, 068, 070, 079, 082, 083) as accepted design choices. Fixed BC-074 (high): separated key lookup from status check in replay; revoked keys now verify signature, only unknown keys skip.
+
+3. **Codebase audit found 4 additional bugs:**
+   - InMemory replay skipped entire event on revoked keys instead of just skipping signature verification (`_in_memory.py:1037`).
+   - InMemory replay applied custom_fields/claim changes unconditionally, not guarded by `if found:` (`_in_memory.py:1096`).
+   - Postgres `update_not_before` missing `work_item_id` in idempotency check (`__init__.py:1247`).
+   - `append_transition_event` stored `{}` as NULL via truthiness check (`_events.py:272`).
+
+4. **Spec updated** — Changed isolation model from DB-per-project to schema-per-project in `spec.md` (7 locations) and `spec.yaml` (4 locations). Added v4 changelog entry documenting the amendment.
+
+**Breadcrumbs resolved:** BC-065, 068, 070, 074, 079, 082, 083, 100–111 (18 total).
+
+**Test results:** 392 passed, lint clean. Pre-existing `test_replay_equivalence` failure unrelated to this session's changes.
+
+---
+
 ## 2026-05-11 — Session 21: Adversarial review resolution
 
 **Focus:** Resolve all actionable gaps from adversarial code review.

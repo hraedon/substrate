@@ -210,6 +210,80 @@ class TestContinueOnRevokedReplay:
         finally:
             revoked_key_path.unlink(missing_ok=True)
 
+    def test_replay_revoked_key_with_wrong_secret_halts(self, substrate):
+        wi, _ = substrate.create_work_item(
+            workflow_name="test_workflow",
+            work_item_type="feature",
+            actor_id="agent-1",
+            custom_fields={"title": "Revoked bad secret"},
+        )
+
+        events = substrate.read_events(work_item_id=wi.work_item_id)
+        original_key_id = events[0].key_id
+
+        bad_secret = "YmFkIHNlY3JldCB0aGF0IGRvZXMgbm90IG1hdGNo"
+        revoked_key_data = {
+            "keys": [
+                {
+                    "key_id": original_key_id,
+                    "secret": bad_secret,
+                    "status": "revoked",
+                },
+            ]
+        }
+
+        revoked_key_path = TESTS_DIR / f"test_keys_cor3_{uuid.uuid4().hex[:8]}.json"
+        try:
+            revoked_key_path.write_text(json.dumps(revoked_key_data))
+
+            revoked_key_set = KeySet(str(revoked_key_path))
+
+            with raw_transaction(substrate) as conn:
+                report = replay_fn(
+                    conn, substrate._mgr.schema, substrate.project, revoked_key_set,
+                    continue_on_revoked=True,
+                )
+                assert report.halted >= 1
+        finally:
+            revoked_key_path.unlink(missing_ok=True)
+
+    def test_replay_unknown_key_with_continue_on_revoked_skips(self, substrate):
+        wi, _ = substrate.create_work_item(
+            workflow_name="test_workflow",
+            work_item_type="feature",
+            actor_id="agent-1",
+            custom_fields={"title": "Unknown key skip"},
+        )
+
+        events = substrate.read_events(work_item_id=wi.work_item_id)
+        original_key_id = events[0].key_id
+
+        unknown_key_data = {
+            "keys": [
+                {
+                    "key_id": "completely-different-key",
+                    "secret": "dGhpcyBpcyBhIHRlc3Qgc2VjcmV0IGtleSBmb3Igc3Vic3RyYXRl",
+                    "status": "active",
+                },
+            ]
+        }
+
+        unknown_key_path = TESTS_DIR / f"test_keys_cor4_{uuid.uuid4().hex[:8]}.json"
+        try:
+            unknown_key_path.write_text(json.dumps(unknown_key_data))
+
+            unknown_key_set = KeySet(str(unknown_key_path))
+
+            with raw_transaction(substrate) as conn:
+                report = replay_fn(
+                    conn, substrate._mgr.schema, substrate.project, unknown_key_set,
+                    continue_on_revoked=True,
+                )
+                assert report.halted == 0
+                assert report.warnings >= 1
+        finally:
+            unknown_key_path.unlink(missing_ok=True)
+
     def test_public_replay_api_accepts_flag(self, substrate):
         wi, _ = substrate.create_work_item(
             workflow_name="test_workflow",

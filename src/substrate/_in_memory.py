@@ -1034,10 +1034,12 @@ class InMemorySubstrate:
                     key_entry = None
                     try:
                         key_entry = self._key_set.verify_key_status(evt.key_id)
-                    except Exception:
-                        if continue_on_revoked:
+                    except SubstrateError as e:
+                        if e.code == ErrorCode.REVOKED_KEY_ID and continue_on_revoked:
+                            key_entry = self._key_set.get_key(evt.key_id)
                             warnings += 1
-                            continue
+                        elif e.code == ErrorCode.UNKNOWN_KEY_ID and continue_on_revoked:
+                            warnings += 1
                         else:
                             raise
                     if key_entry is not None:
@@ -1095,11 +1097,14 @@ class InMemorySubstrate:
                         derived_not_before = None
                 else:
                     wf_data = self._workflows.get((wi["workflow_name"], wi["workflow_version"]))
+                    found = False
                     if wf_data:
                         for t in wf_data.get("transitions", []):
-                            if t["name"] == evt.transition:
+                            if t["name"] == evt.transition and t["from_state"] == derived_state:
                                 derived_state = t["to_state"]
+                                found = True
                                 break
+                    if found:
                         p = evt.payload or {}
                         if "custom_fields_update" in p:
                             derived_fields = {**derived_fields, **p["custom_fields_update"]}

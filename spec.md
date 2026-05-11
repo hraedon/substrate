@@ -27,7 +27,7 @@
 | Term | Definition |
 |---|---|
 | **Substrate** | The library + Postgres schema + protocol providing coordination and durable state for agent pipelines. Library deployment; one substrate instance per project. |
-| **Project** | A logical unit of related work; corresponds 1:1 to one Postgres database. Hosts one or more workflow definitions. |
+| **Project** | A logical unit of related work; corresponds 1:1 to one Postgres schema within a shared database. Hosts one or more workflow definitions. |
 | **Workflow** | A named, versioned declarative state machine describing how a particular kind of work proceeds. A project may register many workflows (e.g., spec generation, implementation, review). |
 | **Workflow definition** | A YAML file (validated against substrate's JSON Schema) declaring states, transitions, role-gating, custom fields per work-item-type, link types, attempt threshold, and per-hook retry overrides. |
 | **Work-item** | A discrete unit of trackable work. Has a workflow, a work-item-type within that workflow, a current state, custom fields, links to other work-items, a `needs_review` flag, and a `not_before` timestamp. |
@@ -46,7 +46,7 @@
 
 **In scope:**
 - Core schema: work-items, events, claims, actors, links
-- Per-project Postgres database isolation (one DB per project)
+- Per-project Postgres schema isolation (one schema per project within a shared database)
 - Workflow definition format (YAML + JSON Schema), parsing, semantic validation, versioned registry
 - Claim lifecycle: acquire, heartbeat/renew, release, expire, auto-steal with attempt tracking
 - Transactional event append + denormalized current-state update
@@ -187,7 +187,7 @@
 
 **Operational:**
 
-- FR-19 **[MVP]**: Per-project Postgres DB isolation. Substrate connects to one DB. Multiple workflow definitions may be registered within that DB. Substrate has no `provision_project_db()` primitive; DB existence is a precondition (operator-shaped). Substrate fails fast with a clear error if the DB doesn't exist.
+- FR-19 **[MVP]**: Per-project Postgres schema isolation. One database hosts all projects; each project gets its own schema. Multiple workflow definitions may be registered within that schema. Substrate has no `provision_project_db()` primitive; database existence is a precondition (operator-shaped). `Substrate.create_project()` creates the project schema and runs migrations. Substrate fails fast with a clear error if the schema doesn't exist.
 - FR-20 **[MVP]**: Startup integrity check — verify (a) all schema migrations are applied; (b) every registered workflow declares a `substrate_version` compatible with the running library version. Refuse to start otherwise; operator runs migration command and re-launches.
 - FR-21 **[MVP]**: Structured logs per substrate operation including `project_id`, `work_item_id`, `operation`, `duration`, `outcome`, `actor_id`. Substrate is a library, not a daemon: it exposes a `prometheus_client.CollectorRegistry` (or labelled metrics) that the host application mounts on its own HTTP server. Substrate does not run an HTTP server. Counters: events appended, claims acquired/expired/stolen, hooks dispatched/succeeded/failed/dead-lettered, transitions accepted/rejected, validators succeeded/failed/timed-out, replay drift count, idempotency-key collisions, expected-seq-mismatch rejections.
 - FR-22 **[MVP]**: Create a link between work-items — validates target exists in same project DB, validates link type is allowed by workflow def for the work-item-type pair, records `link_created` event with `(from, to, type)`.
@@ -257,7 +257,7 @@ Retention: indefinite for v1. Future move when needed: month-partition `events` 
 
 - BR-12: **API-layer idempotency.** All event-emitting mutation operations (event append, transition, claim acquire / release, link create / remove) accept a client-supplied `event_id` (UUIDv4) that doubles as the idempotency key. Duplicate `event_id` returns the original result deterministically rather than producing a second logical operation; this makes caller-side retry across transient failures (DB connection drop, partial response) safe. Operations with structural idempotency do not take an explicit key: `register_workflow` is idempotent on `(workflow_name, version)` (the natural uniqueness constraint); `heartbeat_claim` is idempotent on `(work_item_id, actor_id, attempt_number)` (a repeated heartbeat from the same claim-holder simply extends the TTL). Consolidating idempotency on `event_id` — rather than carrying a parallel `idempotency_key` table — is sufficient because every audit-relevant mutation is now an event (BC-005), and the events table already enforces `event_id` uniqueness.
 
-- BR-13: **Per-project DB isolation is a load-bearing assumption, with a documented migration path.** The "one Postgres database per project" choice (FR-19) is what makes cross-project queries impossible by construction (BR-04) and gives clean backup/restore boundaries. At homelab scale (≤10 projects, single operator, current design context), this is correct. It is NOT correct at multi-team / multi-org scale: hundreds of databases means hundreds of migration runs, connection pools, and backup targets. The public API (§19) is shaped so this boundary can shift without API changes: a `Substrate` handle owns one logical project namespace; whether that namespace maps to a dedicated DB or to a `tenant_id` partition within a shared DB protected by row-level security is internal. A future migration to tenant_id-in-shared-DB requires a one-time data move per project plus addition of a `project_id` column scoped by RLS to `events`, `work_items_current`, `claims`, `hook_queue`, `hook_dead_letter`, `workflow_registry`. No FR signature changes. Consumers should not assume DB-per-project as a permanent fixture; if a deployment approaches the operational pain threshold (subjective, but ~30+ projects is a fair signal), plan the migration before it compounds.
+- BR-13: **Per-project schema isolation is a load-bearing assumption, with a documented migration path.** The "one Postgres schema per project" choice (FR-19) is what makes cross-project queries impossible by construction (BR-04) and gives clean backup/restore boundaries. One shared database keeps the connection pool count constant regardless of project count. At homelab scale (≤10 projects, single operator, current design context), this is correct. It is NOT correct at multi-team / multi-org scale: hundreds of schemas can still be managed but a `tenant_id`-in-shared-schema model with row-level security becomes preferable. The public API (§19) is shaped so this boundary can shift without API changes: a `Substrate` handle owns one logical project namespace; whether that namespace maps to a dedicated schema or to a `tenant_id` partition within a shared schema protected by row-level security is internal. A future migration to tenant_id-in-shared-schema requires a one-time data move per project plus addition of a `project_id` column scoped by RLS to `events`, `work_items_current`, `claims`, `hook_queue`, `hook_dead_letter`, `workflow_registry`. No FR signature changes. Consumers should not assume schema-per-project as a permanent fixture; if a deployment approaches the operational pain threshold (subjective, but ~30+ projects is a fair signal), plan the migration before it compounds.
 
 ---
 
@@ -331,7 +331,7 @@ When resolving any of these during implementation, the implementing agent must e
 | Durable execution engine | Decided | None. Substrate is coordination + state, not orchestration. Postgres-only, library-mode. Projects may layer Temporal on top if needed. |
 | Identity & authorization | Decided | Pluggable verifier. HMAC default with key-set-with-status; OIDC-ready via the same `actor_id` shape. Threat model: authenticated actors trusted not to misdeclare role; actor → allowed_roles deferred (see BR-09). |
 | Schema versioning mechanism | Decided | Library version IS the contract version. Workflow declares `substrate_version`; FR-20 enforces compatibility at startup. Migrations ship with substrate library. |
-| Per-project isolation mechanism | Decided | Separate Postgres database per project. Hardest wall; cleanest backup/restore; cross-project queries impossible (which is the design intent). One DB hosts multiple workflow definitions. |
+| Per-project isolation mechanism | Decided | Separate Postgres schema per project within a shared database. Engine-enforced isolation via `search_path`; clean backup/restore per schema; cross-project queries impossible (which is the design intent). One schema hosts one project's workflow definitions. Single connection pool shared across all projects. |
 | Hook dispatch contract | Decided | Sync hooks (in-process, gate transaction, 5s default timeout) AND async hooks (queue table + LISTEN/NOTIFY + always-on polling). Project picks per-hook in workflow def. |
 | Deployment shape | Decided | Library. Substrate is imported and called as Python; runs in-process; talks directly to Postgres. Non-Python projects deferred (migration to sidecar would be additive). |
 | Workflow file composition | Deferred with flexibility | Single-file workflows in v1. Loader can grow `!include` / merge conventions later without breaking existing files. |
@@ -347,7 +347,7 @@ When resolving any of these during implementation, the implementing agent must e
 | Validator vs hook split | Decided | "Transition validator" = in-transaction, no I/O, gates commit. "Hook" = async, durable queue, retryable, dead-letter on max retries. Naming forces correct mental model. |
 | Public API surface | Decided | Substrate exposes a protocol, not a Postgres connection. Public API takes unsigned event fields; library is sole signer (canonicalization + HMAC are internal). No Postgres connection / cursor / migration object leaks across the boundary. Service-wrapping is mechanical, not architectural (§19). |
 | Consumer expectation boundary | Decided | Substrate is coordination + state, but already implements claims/TTL/escalation/hook dispatch. §20 enumerates explicitly what substrate does NOT do (dwell-time monitoring, work distribution, sagas, scheduling, notifications, SLAs, hierarchy rollups, role enforcement, project code execution) so consumers know what they must build above the substrate. |
-| Project DB isolation as load-bearing | Acknowledged | DB-per-project is correct at homelab scale and intentional (BR-04). Migration path to tenant_id-in-shared-DB documented in BR-13: API surface unchanged; one-time data move per project; RLS-scoped `project_id` columns added. Document set expectations rather than rearchitecting now. |
+| Project isolation as load-bearing | Acknowledged | Schema-per-project is correct at homelab scale and intentional (BR-04). Migration path to tenant_id-in-shared-schema documented in BR-13: API surface unchanged; one-time data move per project; RLS-scoped `project_id` columns added. Document set expectations rather than rearchitecting now. |
 
 ---
 
@@ -461,7 +461,7 @@ The implementing agent determines build sequence based on architectural dependen
 - Library deployment, in-process Postgres calls. Migration to sidecar is additive if non-Python actors arrive.
 - Hybrid persistence: events authoritative, `work_items_current` transactionally projected. Single Postgres transaction per state change.
 - Postgres-only coordination; substrate is not a durable execution engine. Temporal-style orchestration is a layer projects may add on top.
-- Per-project DB isolation; one DB per project; multiple workflows per DB. Operator provisions the DB; substrate runs migrations.
+- Per-project schema isolation; one schema per project within a shared database; multiple workflows per schema. Database is a precondition; `create_project()` creates the schema and runs migrations.
 - Workflow files are versioned in a per-project registry; entries are immutable once referenced; work-items pin the version they were created under; replay validates against historical versions.
 - Custom fields are per-workflow-per-work-item-type with declared types and `ui_visible` flag (default `false`).
 - Side effects via hooks: sync (in-transaction, 5s default timeout) or async (durable queue + LISTEN/NOTIFY + always-on polling).
@@ -481,6 +481,7 @@ The implementing agent determines build sequence based on architectural dependen
 - **(v3)** Public API surface formalized (§19): protocol, not a Postgres connection. Substrate library is the sole sanctioned signer; canonicalization is internal. Service-wrapping is mechanical, not architectural.
 - **(v3)** Consumer expectation boundary (§20): explicit enumeration of what substrate does NOT do (dwell-time monitoring, work distribution, sagas, scheduling, notifications, SLAs, hierarchy rollups, role enforcement, project code execution).
 - **(v3)** Per-project DB isolation (BR-13) acknowledged as load-bearing; migration path to tenant_id-in-shared-DB documented. API surface unchanged either way.
+- **(v4)** Isolation model updated: schema-per-project (one database, one schema per project) replaces the originally specified DB-per-project. Connection pool shared across all projects; `SET LOCAL search_path` scopes each transaction. FR-19, BR-13, and §10 decisions table updated accordingly. Rationale: eliminates per-project connection pools, reduces operational overhead, maintains the same isolation guarantees via engine-enforced `search_path`.
 - **(v4)** Actor → allowed_roles enforcement (FR-24): opt-in enforcement via `actor_roles` table. Actors with no registered roles are trusted; actors with registered roles must claim a role in their set. Closes BR-09.
 - **(v4)** Continue-on-revoked replay flag (FR-25): `replay(continue_on_revoked=True)` skips revoked-key events with warnings instead of halting. `ReplayReport.warnings` tracks count.
 - **(v4)** Postgres version pinned to 15+. Retention policy: always-grow at homelab scale; month-partition at 1M events.

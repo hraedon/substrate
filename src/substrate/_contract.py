@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Literal
 
 from ._errors import ErrorCode, SubstrateError
@@ -30,6 +30,33 @@ def check_reserved_transition(transition: str | None) -> None:
             ErrorCode.TRANSITION_VIA_APPEND_BLOCKED,
             f"Transition {transition!r} is reserved and cannot be appended manually",
         )
+
+
+def validate_event_id(event_id: uuid.UUID) -> None:
+    if event_id.version != 4:
+        raise SubstrateError(
+            ErrorCode.INVALID_ARGUMENT,
+            f"event_id must be UUIDv4, got version {event_id.version}",
+            detail={"event_id": str(event_id), "version": event_id.version},
+        )
+
+
+_MAX_NOT_BEFORE_DELTA = timedelta(days=365)
+
+
+def validate_not_before_delta(not_before: datetime | None, now: datetime) -> None:
+    if not_before is not None:
+        nb_utc = not_before if not_before.tzinfo else not_before.replace(tzinfo=UTC)
+        now_utc = now if now.tzinfo else now.replace(tzinfo=UTC)
+        if (nb_utc - now_utc) > _MAX_NOT_BEFORE_DELTA:
+            raise SubstrateError(
+                ErrorCode.INVALID_ARGUMENT,
+                f"not_before cannot be more than {_MAX_NOT_BEFORE_DELTA.days} days in the future",
+                detail={
+                    "not_before": not_before.isoformat(),
+                    "max_delta_days": _MAX_NOT_BEFORE_DELTA.days,
+                },
+            )
 
 
 def validate_actor_kind(actor_kind: str) -> None:
