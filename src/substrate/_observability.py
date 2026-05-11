@@ -90,6 +90,10 @@ class Metrics:
                 "substrate_validators_timed_out_total",
                 "Validators timed out",
             ),
+            "validators_near_timeout": (
+                "substrate_validators_near_timeout_total",
+                "Validators near timeout (>= 80% of threshold)",
+            ),
             "escalations": (
                 "substrate_escalations_total",
                 "Escalations",

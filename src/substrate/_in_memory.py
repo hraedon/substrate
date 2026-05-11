@@ -188,6 +188,9 @@ class InMemorySubstrate:
         return ConnectionInfo(host=None, port=None, database=None, project=self._project)
 
     def register_validator(self, name: str, handler: Callable) -> None:
+        from ._hooks import check_validator_io_safety
+
+        check_validator_io_safety(handler, name)
         self._validators[name] = handler
 
     def register_hook_handler(self, name: str, handler: Callable) -> None:

@@ -236,8 +236,12 @@ class Substrate:
         Args:
             name: Must match a ``validator`` field in a workflow transition.
             handler: ``Callable[[ValidatorContext], None]``. Must complete
-                within 5 seconds.
+                within 5 seconds. Must not perform I/O (best-effort AST
+                check at registration time).
         """
+        from ._hooks import check_validator_io_safety
+
+        check_validator_io_safety(handler, name)
         updated = dict(self._validators)
         updated[name] = handler
         self._validators = updated
@@ -649,7 +653,12 @@ class Substrate:
                             actor_metadata=actor_metadata,
                         )
                         try:
-                            run_validator(validator_name, handler, ctx)
+                            conn.execute("SET LOCAL statement_timeout = '5s'")
+                            run_validator(
+                                validator_name, handler, ctx,
+                                metrics=self._metrics, project=self._project,
+                            )
+                            conn.execute("SET LOCAL statement_timeout = 0")
                             self._metrics.inc("validators_succeeded", self._project)
                         except SubstrateError as e:
                             if e.code == ErrorCode.VALIDATOR_TIMEOUT:

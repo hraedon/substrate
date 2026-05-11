@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import ast
+import inspect
+import textwrap
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeout
 from datetime import UTC, datetime, timedelta
@@ -19,13 +23,23 @@ from ._types import HookContext, ValidatorContext
 
 log = structlog.get_logger()
 
+_IO_MODULES = frozenset({
+    "socket", "http", "urllib", "requests", "aiohttp", "httpx",
+    "ssl", "ftplib", "smtplib", "telnetlib", "xmlrpc",
+    "psycopg", "sqlite3", "pymysql", "redis",
+    "subprocess",
+})
+
 
 def run_validator(
     validator_name: str,
     handler,
     ctx: ValidatorContext,
     timeout: float = 5.0,
+    metrics: Metrics | None = None,
+    project: str | None = None,
 ) -> None:
+    start = time.monotonic()
     with ThreadPoolExecutor(max_workers=1) as executor:
         future = executor.submit(handler, ctx)
         try:
@@ -42,6 +56,18 @@ def run_validator(
                 ErrorCode.VALIDATOR_FAILED,
                 f"Validator {validator_name!r} failed: {e}",
             ) from e
+
+    elapsed = time.monotonic() - start
+    near_threshold = timeout * 0.8
+    if elapsed >= near_threshold:
+        log.warning(
+            "validators.near_timeout",
+            validator_name=validator_name,
+            elapsed_s=round(elapsed, 3),
+            timeout_s=timeout,
+        )
+        if metrics and project:
+            metrics.inc("validators_near_timeout", project)
 
 
 def enqueue_hooks(
@@ -293,6 +319,41 @@ def requeue_dead_lettered_hook(
     conn.execute(
         SQL("NOTIFY {}, {}").format(Identifier(channel), Literal(str(row["event_id"]))),
     )
+
+
+def check_validator_io_safety(handler: Callable, name: str) -> None:
+    try:
+        source = textwrap.dedent(inspect.getsource(handler))
+    except (OSError, TypeError):
+        log.warning("validators.io_check_skipped", validator_name=name, reason="source_unavailable")
+        return
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        log.warning("validators.io_check_skipped", validator_name=name, reason="parse_failed")
+        return
+
+    names_used = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name):
+            names_used.add(node.id)
+
+    globs = getattr(handler, "__globals__", {})
+    for n in names_used:
+        obj = globs.get(n)
+        if obj is None:
+            continue
+        if inspect.ismodule(obj):
+            mod_name = obj.__name__
+        else:
+            mod_name = getattr(obj, "__module__", "") or ""
+        root = mod_name.split(".")[0]
+        if root in _IO_MODULES:
+            raise SubstrateError(
+                ErrorCode.VALIDATOR_IO_UNSAFE,
+                f"Validator {name!r} references I/O module {mod_name!r}. "
+                f"Sync validators must not perform I/O.",
+            )
 
 
 class HookConsumer:

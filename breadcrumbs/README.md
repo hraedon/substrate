@@ -38,6 +38,7 @@ _(none)_
 | # | Title | Severity | Resolution |
 |---|---|---|---|
 | 083 | No uniqueness checks on state/transition/type names | medium | Accepted — deduplication is deterministic; error surfaces at runtime |
+| 112 | Sync validator row-lock DoS — operational hardening | medium | Implemented — statement_timeout, AST I/O detection, near-timeout watchdog |
 | 082 | Default values not type-checked at workflow registration | medium | Accepted — late validation surfaces error at creation time |
 | 079 | Replay skips work items with zero events silently | medium | Accepted — zero-event items are already corrupt beyond replay's scope |
 | 074 | continue_on_revoked=True skips signature verification entirely | high | Fixed; separated key lookup from status check; revoked keys now verify signature, only unknown keys skip |
