@@ -60,28 +60,16 @@ def check_idempotency(
     event_id: uuid.UUID,
     actor_id: str | None = None,
     transition: str | None = None,
-    payload: dict | None = None,
 ) -> Event | None:
+    from ._contract import check_idempotency as _contract_check
+
     row = conn.execute(
         SQL(f"SELECT {_EVENT_FIELDS} FROM events WHERE event_id = %s"),
         [event_id],
     ).fetchone()
     if row is None:
         return None
-    existing = _row_to_event(row)
-    if actor_id is not None and existing.actor_id != actor_id:
-        raise SubstrateError(
-            ErrorCode.IDEMPOTENCY_COLLISION_WITH_DIFFERENT_PAYLOAD,
-            f"event_id {event_id} already used by actor {existing.actor_id!r}, "
-            f"not {actor_id!r}",
-        )
-    if transition is not None and existing.transition != transition:
-        raise SubstrateError(
-            ErrorCode.IDEMPOTENCY_COLLISION_WITH_DIFFERENT_PAYLOAD,
-            f"event_id {event_id} already used with transition {existing.transition!r}, "
-            f"not {transition!r}",
-        )
-    return existing
+    return _contract_check(_row_to_event(row), actor_id, transition)
 
 
 def check_expected_seq(
@@ -126,6 +114,13 @@ def append_event(
 
     next_seq = wi_row["next_event_seq"]
     check_expected_seq(next_seq, expected_event_seq)
+
+    from ._contract import validate_json_safe_value as _vjs
+
+    if actor_metadata is not None:
+        _vjs(actor_metadata, "actor_metadata")
+    if payload is not None:
+        _vjs(payload, "payload")
 
     signature, canonical_hash, canonical_envelope = sign_event(
         event_id=event_id,
@@ -226,9 +221,16 @@ def append_transition_event(
     next_seq = wi_row["next_event_seq"]
     check_expected_seq(next_seq, expected_event_seq)
 
+    from ._contract import validate_json_safe_value as _vjs
+
+    if actor_metadata is not None:
+        _vjs(actor_metadata, "actor_metadata")
+
     stored_payload = dict(payload) if payload else {}
     if custom_fields_update:
         stored_payload["custom_fields_update"] = custom_fields_update
+
+    _vjs(stored_payload, "payload")
 
     signature, canonical_hash, canonical_envelope = sign_event(
         event_id=event_id,

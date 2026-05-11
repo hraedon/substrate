@@ -4,6 +4,42 @@ Structured log of development sessions and milestones.
 
 ---
 
+## 2026-05-11 — Session 21: Adversarial review resolution
+
+**Focus:** Resolve all actionable gaps from adversarial code review.
+
+**Delivered:**
+
+1. **Expanded `validate_json_safe_value` in `_contract.py`** — deep-walks dicts/lists, rejects `\u0000` AND unpaired surrogates (U+D800–U+DFFF). Replaced the single-string-only `validate_json_safe_string` with a full recursive validator.
+2. **Consolidated idempotency logic** — `_events.py:check_idempotency()` now delegates to `_contract.py::check_idempotency()` instead of duplicating the collision checks. Removed dead `payload` parameter.
+3. **Integrated validation into all JSONB entry points** — `_events.py` (`append_event`, `append_transition_event`) and `_in_memory.py` (`append_event`, `transition`) now call `validate_json_safe_value` on `actor_metadata` and `payload` before storage, closing the divergence gap for all JSONB-bound data.
+4. **Fixed `ruff` import sorting** in `_in_memory.py`.
+
+**Breadcrumbs filed (deferred):** 065–070 (6 deferred items from adversarial review).
+
+**Test Results:** 300 passed, lint clean.
+
+---
+
+## 2026-05-11 — Session 20: Validation scan — fix null-byte conformance divergence
+
+**Focus:** Run full validation scan on recent RFC-062 work; fix conformance bug found.
+
+**Context:** Property-based conformance test `test_random_sequences_equivalent` was failing
+because `InMemorySubstrate` silently accepted `\u0000` in string custom fields while Postgres
+JSONB rejected them with `UntranslatableCharacter`.
+
+**Delivered:**
+
+1. **Added `validate_json_safe_string()` to `_contract.py`** — shared rejection of `\u0000` in strings.
+2. **Integrated into `_coerce_field()` in `_workflow.py`** — string-typed custom fields are now validated by both backends.
+
+**Breadcrumbs resolved:** 064 (new).
+
+**Test Results:** 300 passed, lint clean.
+
+---
+
 ## 2026-05-11 — Session 19: RFC-062 single-source-of-truth backend contract
 
 **Focus:** Implement RFC-062 — declarative backend contract + property-based conformance testing.

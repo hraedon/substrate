@@ -25,13 +25,14 @@ related: ["002", "003"]
 - **medium** — defect with workaround or limited blast radius
 - **low** — edge case, polish, or minor API ergonomics
 
-## Open
+## Deferred
 
-No open breadcrumbs.
-
-## RFCs (awaiting future work)
-
-No pending RFCs. All RFCs have been resolved.
+| 070 | Replay temp tables accumulate between replay() calls | low | [deferred/070](deferred/070-replay-temp-table-accumulation.md) |
+| 069 | __init__.py has excessive _types re-export boilerplate | low | [deferred/069](deferred/069-init-re-export-boilerplate.md) |
+| 068 | validate_field_values takes WorkflowDefinition but validate_field_update takes raw dict | low | [deferred/068](deferred/068-inconsistent-workflow-param-types.md) |
+| 067 | _contract.py has no standalone unit tests | medium | [deferred/067](deferred/067-contract-no-unit-tests.md) |
+| 066 | KeySet hot-reload TOCTOU between active_key_id check and access | low | [deferred/066](deferred/066-keys-hot-reload-touctou.md) |
+| 065 | HookConsumer nested transaction risk with append_event under savepoints | low | [deferred/065](deferred/065-hook-savepoint-deadlock.md) |
 
 ## Resolved
 
@@ -87,6 +88,7 @@ No pending RFCs. All RFCs have been resolved.
 | 015 | Replay matches transitions by name only, not (name, from_state) | medium | [resolved/015](resolved/015-replay-name-only-match.md) |
 | 014 | remove_link does not validate that the link exists | low | [resolved/014](resolved/014-remove-link-no-existence-check.md) |
 | 013 | has_link_type filter does not account for link_removed events | medium | [resolved/013](resolved/013-has-link-type-ignores-removal.md) |
+| 064 | Backend divergence on null-byte (\u0000) strings in JSONB fields | medium | [resolved/064](resolved/064-null-byte-string-divergence.md) |
 | 012 | Event.timestamp returned to caller differs from server-side stored value | low | [resolved/012](resolved/012-event-timestamp-mismatch.md) |
 | 011 | Event dataclass missing workflow_name field | low | [resolved/011](resolved/011-event-missing-workflow-name.md) |
 | 010 | append_event allows arbitrary transition strings, bypassing FR-11/FR-12 | high | [resolved/010](resolved/010-append-event-bypasses-validation.md) |

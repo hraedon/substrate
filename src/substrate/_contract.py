@@ -332,6 +332,37 @@ def validate_release(
         )
 
 
+_JSONB_UNSAFE_CODES = frozenset(
+    range(0xD800, 0xE000)
+)
+
+
+def validate_json_safe_value(value: object, label: str) -> None:
+    if isinstance(value, str):
+        _check_string_safe(value, label)
+    elif isinstance(value, dict):
+        for k, v in value.items():
+            _check_string_safe(k, f"{label} key")
+            validate_json_safe_value(v, f"{label}.{k}")
+    elif isinstance(value, list):
+        for i, item in enumerate(value):
+            validate_json_safe_value(item, f"{label}[{i}]")
+
+
+def _check_string_safe(value: str, label: str) -> None:
+    if "\u0000" in value:
+        raise SubstrateError(
+            ErrorCode.INVALID_ARGUMENT,
+            f"{label} contains disallowed character \\u0000",
+        )
+    for ch in value:
+        if ord(ch) in _JSONB_UNSAFE_CODES:
+            raise SubstrateError(
+                ErrorCode.INVALID_ARGUMENT,
+                f"{label} contains unpaired surrogate U+{ord(ch):04X}",
+            )
+
+
 def validate_work_item_exists(
     work_item: object,
     work_item_id: uuid.UUID,

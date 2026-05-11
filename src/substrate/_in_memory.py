@@ -15,12 +15,15 @@ from ._contract import (
     resolve_heartbeat,
     resolve_transition,
     should_escalate,
-    validate_actor_kind,
+    validate_json_safe_value,
     validate_link_type,
     validate_read_events_filters,
     validate_release,
     validate_ttl,
     validate_work_item_exists,
+)
+from ._contract import (
+    validate_actor_kind as _validate_actor_kind,
 )
 from ._errors import ErrorCode, SubstrateError
 from ._integrity import SUBSTRATE_VERSION
@@ -332,7 +335,7 @@ class InMemorySubstrate:
         not_before: datetime | None = None,
         event_id: uuid.UUID | None = None,
     ) -> tuple[WorkItem, Event]:
-        validate_actor_kind(actor_kind)
+        _validate_actor_kind(actor_kind)
         if event_id is None:
             event_id = uuid.uuid4()
 
@@ -410,7 +413,11 @@ class InMemorySubstrate:
         event_id: uuid.UUID | None = None,
         expected_event_seq: int | None = None,
     ) -> Event:
-        validate_actor_kind(actor_kind)
+        _validate_actor_kind(actor_kind)
+        if actor_metadata is not None:
+            validate_json_safe_value(actor_metadata, "actor_metadata")
+        if payload is not None:
+            validate_json_safe_value(payload, "payload")
         if event_id is None:
             event_id = uuid.uuid4()
 
@@ -473,7 +480,11 @@ class InMemorySubstrate:
         event_id: uuid.UUID | None = None,
         expected_event_seq: int | None = None,
     ) -> Event:
-        validate_actor_kind(actor_kind)
+        _validate_actor_kind(actor_kind)
+        if actor_metadata is not None:
+            validate_json_safe_value(actor_metadata, "actor_metadata")
+        if payload is not None:
+            validate_json_safe_value(payload, "payload")
         if event_id is None:
             event_id = uuid.uuid4()
 
@@ -728,7 +739,7 @@ class InMemorySubstrate:
         event_id: uuid.UUID | None = None,
         actor_kind: str = "agent",
     ) -> Claim:
-        validate_actor_kind(actor_kind)
+        _validate_actor_kind(actor_kind)
         validate_ttl(ttl_seconds)
 
         wi = self._work_items.get(work_item_id)
@@ -822,7 +833,7 @@ class InMemorySubstrate:
         event_id: uuid.UUID | None = None,
         actor_kind: str = "agent",
     ) -> None:
-        validate_actor_kind(actor_kind)
+        _validate_actor_kind(actor_kind)
         claim = self._claims.get(work_item_id)
         validate_release(claim, actor_id, work_item_id)
 
@@ -869,7 +880,7 @@ class InMemorySubstrate:
         event_id: uuid.UUID | None = None,
         payload: dict | None = None,
     ) -> Link:
-        validate_actor_kind(actor_kind)
+        _validate_actor_kind(actor_kind)
         if event_id is None:
             event_id = uuid.uuid4()
 
@@ -937,7 +948,7 @@ class InMemorySubstrate:
         *,
         event_id: uuid.UUID | None = None,
     ) -> None:
-        validate_actor_kind(actor_kind)
+        _validate_actor_kind(actor_kind)
         if event_id is None:
             event_id = uuid.uuid4()
 
@@ -1124,7 +1135,7 @@ class InMemorySubstrate:
         *,
         event_id: uuid.UUID | None = None,
     ) -> Event:
-        validate_actor_kind(actor_kind)
+        _validate_actor_kind(actor_kind)
         if event_id is None:
             event_id = uuid.uuid4()
 

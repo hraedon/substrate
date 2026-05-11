@@ -9,6 +9,7 @@ import jsonschema
 import structlog
 import yaml
 
+from ._contract import validate_json_safe_value
 from ._errors import ErrorCode, SubstrateError
 from ._jcs import canonicalize
 from ._types import (
@@ -359,6 +360,7 @@ def _coerce_field(field_def: CustomFieldDef, value: object) -> object:
                 f"Field {field_def.name!r} expects string, got {type(value).__name__}",
                 detail={"field": field_def.name},
             )
+        validate_json_safe_value(value, f"Field {field_def.name!r}")
     elif ftype == "integer":
         if not isinstance(value, int) or isinstance(value, bool):
             raise SubstrateError(
