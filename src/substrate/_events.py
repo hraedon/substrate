@@ -60,6 +60,7 @@ def check_idempotency(
     event_id: uuid.UUID,
     actor_id: str | None = None,
     transition: str | None = None,
+    work_item_id: uuid.UUID | None = None,
 ) -> Event | None:
     from ._contract import check_idempotency as _contract_check
 
@@ -69,7 +70,7 @@ def check_idempotency(
     ).fetchone()
     if row is None:
         return None
-    return _contract_check(_row_to_event(row), actor_id, transition)
+    return _contract_check(_row_to_event(row), actor_id, transition, work_item_id)
 
 
 def check_expected_seq(
@@ -108,7 +109,10 @@ def append_event(
             f"Work item {work_item_id} not found",
         )
 
-    existing = check_idempotency(conn, event_id, actor_id=actor_id, transition=transition)
+    existing = check_idempotency(
+        conn, event_id, actor_id=actor_id, transition=transition,
+        work_item_id=work_item_id,
+    )
     if existing is not None:
         return existing
 
@@ -214,6 +218,7 @@ def append_transition_event(
 
     existing = check_idempotency(
         conn, event_id, actor_id=actor_id, transition=transition_name,
+        work_item_id=work_item_id,
     )
     if existing is not None:
         return existing

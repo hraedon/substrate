@@ -175,7 +175,8 @@
                   "type": "array",
                   "items": {
                     "type": "string"
-                  }
+                  },
+                  "minItems": 1
                 },
                 "target_work_item_type": {
                   "type": "string"

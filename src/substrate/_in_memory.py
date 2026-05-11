@@ -208,6 +208,7 @@ class InMemorySubstrate:
         self._dead_letter[entry["id"]] = {
             "id": entry["id"],
             "event_id": entry["event_id"],
+            "work_item_id": entry.get("work_item_id"),
             "hook_name": entry["hook_name"],
             "hook_type": entry.get("hook_type", "async"),
             "payload": entry.get("payload"),
@@ -437,6 +438,7 @@ class InMemorySubstrate:
             self._event_id_index.get(event_id),
             actor_id,
             transition,
+            work_item_id,
         )
         if existing is not None:
             return existing
@@ -547,6 +549,7 @@ class InMemorySubstrate:
             self._event_id_index.get(event_id),
             actor_id,
             transition_name,
+            work_item_id,
         )
         if existing is not None:
             return existing
@@ -631,8 +634,8 @@ class InMemorySubstrate:
                 evts = [e for e in evts if e.event_seq < before_seq]
                 evts.sort(key=lambda e: e.event_seq, reverse=True)
                 return list(reversed(evts[:limit]))
-            evts.sort(key=lambda e: e.event_seq)
-            return evts[:limit]
+            evts.sort(key=lambda e: e.event_seq, reverse=True)
+            return list(reversed(evts[:limit]))
         if actor_id is not None:
             evts = [e for el in self._events.values() for e in el]
             evts = [e for e in evts if e.actor_id == actor_id]
@@ -1094,7 +1097,7 @@ class InMemorySubstrate:
         self._hook_queue.append({
             "id": entry["original_hook_queue_id"] or len(self._hook_queue) + 1,
             "event_id": entry["event_id"],
-            "work_item_id": payload.get("work_item_id"),
+            "work_item_id": entry.get("work_item_id"),
             "hook_name": entry["hook_name"],
             "hook_type": entry["hook_type"],
             "transition": payload.get("transition"),
@@ -1146,6 +1149,7 @@ class InMemorySubstrate:
             self._event_id_index.get(event_id),
             actor_id,
             "not_before_set",
+            work_item_id,
         )
         if existing is not None:
             return existing

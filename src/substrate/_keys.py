@@ -110,16 +110,18 @@ class KeySet:
 
     def active_key(self) -> KeyEntry:
         self._maybe_reload()
-        if self._active_key_id is None or self._active_key_id not in self._keys:
+        keys = self._keys
+        active_id = self._active_key_id
+        if active_id is None or active_id not in keys:
             raise SubstrateError(
                 ErrorCode.UNKNOWN_KEY_ID,
                 "No active signing key available",
             )
-        entry = self._keys[self._active_key_id]
+        entry = keys[active_id]
         if entry.status == "revoked":
             raise SubstrateError(
                 ErrorCode.REVOKED_KEY_ID,
-                f"Active key {self._active_key_id!r} is revoked",
+                f"Active key {active_id!r} is revoked",
             )
         return entry
 

@@ -106,11 +106,18 @@ def check_append_blocked(
 
 def check_idempotency(
     existing_event: Event | None,
-    actor_id: str,
+    actor_id: str | None,
     transition: str | None,
+    work_item_id: uuid.UUID | None = None,
 ) -> Event | None:
     if existing_event is None:
         return None
+    if work_item_id is not None and existing_event.work_item_id != work_item_id:
+        raise SubstrateError(
+            ErrorCode.IDEMPOTENCY_COLLISION_WITH_DIFFERENT_PAYLOAD,
+            f"event_id {existing_event.event_id} already used for work_item "
+            f"{existing_event.work_item_id}, not {work_item_id}",
+        )
     if actor_id is not None and existing_event.actor_id != actor_id:
         raise SubstrateError(
             ErrorCode.IDEMPOTENCY_COLLISION_WITH_DIFFERENT_PAYLOAD,
@@ -206,6 +213,7 @@ def resolve_claim_acquire(
     ttl_seconds: int,
     now: datetime,
 ) -> ClaimAcquireResult:
+    validate_ttl(ttl_seconds)
     validate_not_before(wi_not_before, now)
 
     has_active_claim = (
@@ -291,6 +299,12 @@ def resolve_heartbeat(
             f"No claim found for work item {work_item_id}",
         )
 
+    if claim_state.get("expires_at") is not None and claim_state["expires_at"] < now:
+        raise SubstrateError(
+            ErrorCode.CLAIM_LOST,
+            f"Claim on {work_item_id} expired at {claim_state['expires_at']}",
+        )
+
     if claim_state["actor_id"] != actor_id:
         raise SubstrateError(
             ErrorCode.CLAIM_LOST,
@@ -347,6 +361,11 @@ def validate_json_safe_value(value: object, label: str) -> None:
     elif isinstance(value, list):
         for i, item in enumerate(value):
             validate_json_safe_value(item, f"{label}[{i}]")
+    elif not isinstance(value, (int, float, bool, type(None))):
+        raise SubstrateError(
+            ErrorCode.INVALID_ARGUMENT,
+            f"{label} has unsupported type {type(value).__name__} for JSON serialization",
+        )
 
 
 def _check_string_safe(value: str, label: str) -> None:

@@ -27,17 +27,34 @@ related: ["002", "003"]
 
 ## Deferred
 
+| 083 | No uniqueness checks on state/transition/type names | medium | [deferred/083](deferred/083-no-uniqueness-checks-on-names.md) |
+| 082 | Default values not type-checked at registration | medium | [deferred/082](deferred/082-default-values-not-type-checked.md) |
+| 079 | Replay skips work items with zero events silently | medium | [deferred/079](deferred/079-replay-skips-zero-event-work-items.md) |
+| 074 | continue_on_revoked=True skips signature verification entirely | high | [deferred/074](deferred/074-continue-on-revoked-skips-signature.md) |
 | 070 | Replay temp tables accumulate between replay() calls | low | [deferred/070](deferred/070-replay-temp-table-accumulation.md) |
-| 069 | __init__.py has excessive _types re-export boilerplate | low | [deferred/069](deferred/069-init-re-export-boilerplate.md) |
 | 068 | validate_field_values takes WorkflowDefinition but validate_field_update takes raw dict | low | [deferred/068](deferred/068-inconsistent-workflow-param-types.md) |
-| 067 | _contract.py has no standalone unit tests | medium | [deferred/067](deferred/067-contract-no-unit-tests.md) |
-| 066 | KeySet hot-reload TOCTOU between active_key_id check and access | low | [deferred/066](deferred/066-keys-hot-reload-touctou.md) |
 | 065 | HookConsumer nested transaction risk with append_event under savepoints | low | [deferred/065](deferred/065-hook-savepoint-deadlock.md) |
 
 ## Resolved
 
 | # | Title | Severity | Resolution |
 |---|---|---|---|
+| 087 | _validators dict not copy-on-write (thread safety) | medium | `register_validator` now uses copy-on-write pattern matching `register_hook_handler` |
+| 086 | validate_json_safe_value silently passes non-JSON types | medium | Added else clause raising INVALID_ARGUMENT for set, bytes, tuple, Decimal, etc. |
+| 085 | close() is not idempotent | medium | Added None guard on `self._mgr`; second call is a no-op |
+| 084 | Empty enum_values array accepted | medium | Added `minItems: 1` to JSON Schema for enum_values |
+| 081 | check_idempotency actor_id type annotation wrong | medium | Changed `actor_id: str` to `actor_id: str \| None` |
+| 080 | Idempotency check does not verify work_item_id | medium | Added `work_item_id` param to `check_idempotency`; verifies match when provided |
+| 078 | InMemory requeue_dead_lettered_hook loses work_item_id | medium | Store `work_item_id` at top level in dead-letter; use it directly on requeue |
+| 077 | Missing validate_ttl in resolve_claim_acquire | high | Added `validate_ttl(ttl_seconds)` at top of `resolve_claim_acquire` |
+| 076 | JSON-typed custom fields bypass validate_json_safe_value | high | Added `validate_json_safe_value` call in the json branch of `_coerce_field` |
+| 075 | create_project and __init__ leak connection pool on failure | high | `create_project`: try/finally; `__init__`: try/except with `mgr.close()` on failure |
+| 073 | InMemory read_events returns oldest events; Postgres returns newest | high | Fixed InMemory to sort DESC, take limit, reverse (matching Postgres) |
+| 072 | Replay silently swallows unrecognized transitions with custom_fields_update | critical | Only apply custom_fields_update when transition matches workflow definition |
+| 071 | Heartbeat revives expired claims (zombie revival) | critical | Added expiry check to `resolve_heartbeat`; expired claims now raise CLAIM_LOST |
+| 069 | __init__.py has excessive _types re-export boilerplate | low | Consolidated ~20 individual import blocks into 3 grouped blocks (`_contract`, `_events`, `_types`) |
+| 067 | _contract.py has no standalone unit tests | medium | Added `tests/test_contract.py` with 85 unit tests covering all 17 pure functions |
+| 066 | KeySet hot-reload TOCTOU between active_key_id check and access | low | `active_key()` now captures `keys`/`active_id` as locals before check+access |
 | 063 | Add optional prompt_template_hash field to ActorMetadata | low | Added `prompt_template_hash: str | None = None` to `ActorMetadata`; round-trip via `to_dict`/`from_dict`; 5 tests in `test_actor_metadata_contract.py` |
 | 062 | Single-source-of-truth backend contract — eliminate hand-maintained InMemorySubstrate parity | high | Added `_contract.py` with 20 pure validation/decision functions; both backends refactored to delegate; 5 property-based conformance tests via hypothesis (Option A + B) |
 | 061 | Provide a workflow-yaml validator that does not require a live database | low | Added `validate_yaml(path_or_string) -> ValidationResult` to `_workflow.py`; exposed via `substrate.validate_yaml` and `substrate.testing.validate_yaml`; 11 tests in `test_validate_yaml.py` |

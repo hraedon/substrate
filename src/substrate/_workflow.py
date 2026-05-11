@@ -389,6 +389,7 @@ def _coerce_field(field_def: CustomFieldDef, value: object) -> object:
                 f"Field {field_def.name!r} expects JSON-compatible value",
                 detail={"field": field_def.name},
             )
+        validate_json_safe_value(value, f"Field {field_def.name!r}")
     elif ftype == "enum":
         if value not in (field_def.enum_values or []):
             raise SubstrateError(

@@ -47,6 +47,7 @@ from ._types import (
 from ._types import (
     ActorRole,
     Claim,
+    ConnectionInfo,
     DeadLetterEntry,
     Event,
     Link,
@@ -55,9 +56,6 @@ from ._types import (
     ValidatorContext,
     WorkflowVersion,
     WorkItem,
-)
-from ._types import (
-    ConnectionInfo as ConnectionInfo,
 )
 from ._types import (
     HookContext as HookContext,
@@ -119,25 +117,29 @@ class Substrate:
                 "hmac_key_path is required",
             )
         self._mgr = ConnectionManager(dsn, project, pool_min=pool_min, pool_max=pool_max)
-        self._mgr.open()
-        self._mgr.ensure_schema()
-        self._keys = KeySet(hmac_key_path)
-        self._metrics = Metrics(registry=prometheus_registry)
-        self._project = project
-        self._validators: dict[str, Callable] = {}
-        self._hook_handlers: dict[str, Callable] = {}
-        self._hook_channel = f"substrate_hooks_{self._mgr.schema}"
-        from ._hooks import HookConsumer
+        try:
+            self._mgr.open()
+            self._mgr.ensure_schema()
+            self._keys = KeySet(hmac_key_path)
+            self._metrics = Metrics(registry=prometheus_registry)
+            self._project = project
+            self._validators: dict[str, Callable] = {}
+            self._hook_handlers: dict[str, Callable] = {}
+            self._hook_channel = f"substrate_hooks_{self._mgr.schema}"
+            from ._hooks import HookConsumer
 
-        self._hook_consumer = HookConsumer(
-            dsn=self._mgr.dsn,
-            schema=self._mgr.schema,
-            project=project,
-            handlers=self._hook_handlers,
-            key_set=self._keys,
-            metrics=self._metrics,
-        )
-        check_integrity(self._mgr)
+            self._hook_consumer = HookConsumer(
+                dsn=self._mgr.dsn,
+                schema=self._mgr.schema,
+                project=project,
+                handlers=self._hook_handlers,
+                key_set=self._keys,
+                metrics=self._metrics,
+            )
+            check_integrity(self._mgr)
+        except:
+            self._mgr.close()
+            raise
         log.info("substrate.connected", project=project, substrate_version=SUBSTRATE_VERSION)
 
     @classmethod
@@ -165,10 +167,12 @@ class Substrate:
             A connected ``Substrate`` instance.
         """
         mgr = ConnectionManager(dsn, project, pool_min=pool_min, pool_max=pool_max)
-        mgr.open()
-        mgr.create_schema()
-        run_migrations(mgr)
-        mgr.close()
+        try:
+            mgr.open()
+            mgr.create_schema()
+            run_migrations(mgr)
+        finally:
+            mgr.close()
         log.info("substrate.project_created", project=project)
         return cls(
             dsn,
@@ -183,7 +187,9 @@ class Substrate:
         """Stop hook consumer (if running) and release the connection pool."""
         if self._hook_consumer.is_running:
             self._hook_consumer.stop()
-        self._mgr.close()
+        if self._mgr is not None:
+            self._mgr.close()
+            self._mgr = None
         log.info("substrate.disconnected", project=self._project)
 
     @property
@@ -223,7 +229,9 @@ class Substrate:
             handler: ``Callable[[ValidatorContext], None]``. Must complete
                 within 5 seconds.
         """
-        self._validators[name] = handler
+        updated = dict(self._validators)
+        updated[name] = handler
+        self._validators = updated
 
     def register_hook_handler(self, name: str, handler: Callable) -> None:
         """Register an async hook handler dispatched via the hook queue.

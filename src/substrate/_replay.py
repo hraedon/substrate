@@ -302,9 +302,10 @@ def _replay_work_item(
                         f"Transition {transition!r} exists but not valid from state {state!r}"
                     )
 
-            payload = evt["payload"] or {}
-            if payload.get("custom_fields_update"):
-                custom_fields = {**custom_fields, **payload["custom_fields_update"]}
+            if found:
+                payload = evt["payload"] or {}
+                if payload.get("custom_fields_update"):
+                    custom_fields = {**custom_fields, **payload["custom_fields_update"]}
 
     return {
         "current_state": state,
