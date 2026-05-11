@@ -174,7 +174,7 @@ def replay(
                 replayed_state["last_event_seq"],
                 None,
                 replayed_state["last_event_seq"] + 1,
-                None,
+                replayed_state["claimed_by"],
                 None,
                 replayed_state["attempt_number"],
             ],
@@ -210,6 +210,7 @@ def _replay_work_item(
     not_before: datetime | None = None
     last_seq = 0
     attempt_number = 0
+    claimed_by: str | None = None
     warnings = 0
 
     for evt in events:
@@ -268,6 +269,14 @@ def _replay_work_item(
         ):
             if transition in ("claim_acquired", "claim_stolen"):
                 attempt_number += 1
+            if transition == "claim_acquired":
+                payload = evt["payload"] or {}
+                claimed_by = payload.get("actor_id")
+            elif transition == "claim_stolen":
+                payload = evt["payload"] or {}
+                claimed_by = payload.get("new_actor_id")
+            elif transition in ("claim_released", "claim_expired"):
+                claimed_by = None
         elif transition == "escalated":
             needs_review = True
         elif transition == "not_before_set":
@@ -306,6 +315,7 @@ def _replay_work_item(
                 payload = evt["payload"] or {}
                 if payload.get("custom_fields_update"):
                     custom_fields = {**custom_fields, **payload["custom_fields_update"]}
+                claimed_by = None
 
     return {
         "current_state": state,
@@ -314,6 +324,7 @@ def _replay_work_item(
         "not_before": not_before,
         "last_event_seq": last_seq,
         "attempt_number": attempt_number,
+        "claimed_by": claimed_by,
     }, warnings
 
 
@@ -329,6 +340,8 @@ def _states_match(replayed: dict, live: dict) -> bool:
     if replayed["not_before"] != live["not_before"]:
         return False
     if replayed["attempt_number"] != live["attempt_number"]:
+        return False
+    if replayed["claimed_by"] != live["claimed_by"]:
         return False
     return True
 
@@ -347,4 +360,6 @@ def _diff_fields(replayed: dict, live: dict) -> list[str]:
         diffs.append("not_before")
     if replayed["attempt_number"] != live["attempt_number"]:
         diffs.append("attempt_number")
+    if replayed["claimed_by"] != live["claimed_by"]:
+        diffs.append("claimed_by")
     return diffs

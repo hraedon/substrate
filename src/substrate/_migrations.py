@@ -80,14 +80,15 @@ def check_migrations_current(mgr: ConnectionManager) -> None:
     all_migrations = discover_migrations()
     if not all_migrations:
         return
-    max_available = max(v for v, _ in all_migrations)
+    available = {v for v, _ in all_migrations}
     applied = applied_versions(mgr)
-    if max_available not in applied:
+    missing = available - applied
+    if missing:
         from ._errors import ErrorCode, SubstrateError
 
         raise SubstrateError(
             ErrorCode.MIGRATION_REQUIRED,
             f"Migrations pending: schema {mgr.schema!r} has applied "
-            f"{sorted(applied)}, latest available is {max_available}. "
+            f"{sorted(applied)}, missing {sorted(missing)}. "
             "Run substrate migrations before starting.",
         )

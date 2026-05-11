@@ -39,6 +39,9 @@ def drop_project_schema(dsn: str, project: str) -> None:
     """
     from psycopg.sql import SQL, Identifier
 
+    from ._connection import validate_project_name
+
+    validate_project_name(project)
     conn = psycopg.connect(dsn, autocommit=True)
     conn.execute(SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(Identifier(project)))
     conn.close()

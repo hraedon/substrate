@@ -41,7 +41,7 @@ def run_validator(
             raise SubstrateError(
                 ErrorCode.VALIDATOR_FAILED,
                 f"Validator {validator_name!r} failed: {e}",
-            )
+            ) from e
 
 
 def enqueue_hooks(
@@ -112,7 +112,8 @@ def poll_and_process_hooks(
             "FROM hook_queue "
             "WHERE status = 'pending' "
             "AND (next_retry_at IS NULL OR next_retry_at <= now()) "
-            "ORDER BY id LIMIT 100"
+            "ORDER BY id LIMIT 100 "
+            "FOR UPDATE SKIP LOCKED"
         ),
     ).fetchall()
 

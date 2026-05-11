@@ -13,6 +13,9 @@ from ._contract import (
     check_append_blocked as _check_append_blocked,
 )
 from ._contract import (
+    check_reserved_transition as _check_reserved_transition,
+)
+from ._contract import (
     check_role_gating as _check_role_gating,
 )
 from ._contract import (
@@ -483,6 +486,7 @@ class Substrate:
                     )
 
                 if transition is not None:
+                    _check_reserved_transition(transition)
                     wf_data = conn.execute(
                         "SELECT definition FROM workflow_registry "
                         "WHERE workflow_name = %s AND version = %s",

@@ -39,6 +39,18 @@ related: ["002", "003"]
 
 | # | Title | Severity | Resolution |
 |---|---|---|---|
+| 099 | InMemorySubstrate.release_claim can raise KeyError on concurrent sweep | medium | Changed `del` to `.pop(work_item_id, None)` |
+| 098 | claimable_now filter uses transaction-time now() instead of statement-time | medium | Documented as design choice; `clock_timestamp()` alternative noted in spec |
+| 097 | drop_project_schema does not validate project name before executing DROP SCHEMA | medium | `validate_project_name()` now called before any SQL is executed |
+| 096 | run_validator loses original exception chain | medium | Added `from e` to preserve exception chain for downstream debugging |
+| 095 | InMemorySubstrate replay ignores continue_on_revoked and never verifies signatures | high | In-memory replay now verifies dummy signatures and respects `continue_on_revoked` when KeySet is configured |
+| 094 | Hook queue table lacks a composite index for the polling query | high | Migration 007 adds `idx_hook_queue_poll (status, next_retry_at, id)` partial index |
+| 093 | query_work_items has_link_type filter performs correlated sequential scan without index | high | Migration 007 adds `idx_events_link_type` partial composite index on link transitions |
+| 092 | validate_json_safe_value allows NaN and Infinity, which Postgres JSONB rejects | high | Added explicit float branch rejecting `NaN` and `±Inf` with `INVALID_ARGUMENT` |
+| 091 | Schema name validation accepts reserved / system schema names | high | `validate_project_name` now rejects `public`, `pg_*`, `information_schema`, etc. |
+| 090 | Replay does not reconstruct claim state — projection not fully derivable from events | critical | `_replay_work_item` now tracks `claimed_by` from claim events; included in `_states_match` / `_diff_fields` |
+| 089 | append_event accepts reserved system transition names — can spoof escalations and corrupt replay | critical | Added `_RESERVED_TRANSITIONS` frozenset; blocked in both Postgres and in-memory `append_event` |
+| 088 | Async hook queue poll lacks row locking — concurrent consumers double-process hooks | critical | Added `FOR UPDATE SKIP LOCKED` to `poll_and_process_hooks` SELECT |
 | 087 | _validators dict not copy-on-write (thread safety) | medium | `register_validator` now uses copy-on-write pattern matching `register_hook_handler` |
 | 086 | validate_json_safe_value silently passes non-JSON types | medium | Added else clause raising INVALID_ARGUMENT for set, bytes, tuple, Decimal, etc. |
 | 085 | close() is not idempotent | medium | Added None guard on `self._mgr`; second call is a no-op |

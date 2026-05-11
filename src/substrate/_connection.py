@@ -12,6 +12,9 @@ from psycopg_pool import ConnectionPool
 from ._errors import ErrorCode, SubstrateError
 
 _SCHEMA_RE = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
+_RESERVED_SCHEMAS = frozenset(
+    {"public", "information_schema", "pg_catalog", "pg_toast"}
+)
 
 
 def validate_project_name(name: str) -> str:
@@ -19,6 +22,10 @@ def validate_project_name(name: str) -> str:
         raise ValueError(
             f"Invalid project name {name!r}: must be 1-63 chars, lowercase "
             "alphanumeric/underscore, start with letter or underscore"
+        )
+    if name in _RESERVED_SCHEMAS or name.startswith("pg_"):
+        raise ValueError(
+            f"Invalid project name {name!r}: reserved schema name"
         )
     return name
 

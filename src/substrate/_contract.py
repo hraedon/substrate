@@ -10,6 +10,27 @@ from ._types import Event
 
 _VALID_ACTOR_KINDS = frozenset({"agent", "human", "system"})
 
+_RESERVED_TRANSITIONS = frozenset({
+    "created",
+    "claim_acquired",
+    "claim_stolen",
+    "claim_released",
+    "claim_expired",
+    "link_created",
+    "link_removed",
+    "escalated",
+    "not_before_set",
+    "hook_dead_lettered",
+})
+
+
+def check_reserved_transition(transition: str | None) -> None:
+    if transition in _RESERVED_TRANSITIONS:
+        raise SubstrateError(
+            ErrorCode.TRANSITION_VIA_APPEND_BLOCKED,
+            f"Transition {transition!r} is reserved and cannot be appended manually",
+        )
+
 
 def validate_actor_kind(actor_kind: str) -> None:
     if actor_kind not in _VALID_ACTOR_KINDS:
@@ -258,6 +279,7 @@ def resolve_claim_acquire(
                 "prior_actor_id": prior_actor_id,
                 "new_actor_id": actor_id,
                 "attempt_number": attempt_number,
+                "expires_at": expires_at.isoformat(),
             },
         )
 
@@ -361,7 +383,15 @@ def validate_json_safe_value(value: object, label: str) -> None:
     elif isinstance(value, list):
         for i, item in enumerate(value):
             validate_json_safe_value(item, f"{label}[{i}]")
-    elif not isinstance(value, (int, float, bool, type(None))):
+    elif isinstance(value, float):
+        import math
+
+        if math.isnan(value) or math.isinf(value):
+            raise SubstrateError(
+                ErrorCode.INVALID_ARGUMENT,
+                f"{label} contains disallowed float value {value}",
+            )
+    elif not isinstance(value, (int, bool, type(None))):
         raise SubstrateError(
             ErrorCode.INVALID_ARGUMENT,
             f"{label} has unsupported type {type(value).__name__} for JSON serialization",

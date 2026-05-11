@@ -10,6 +10,7 @@ from ._contract import (
     check_append_blocked,
     check_expected_seq,
     check_idempotency,
+    check_reserved_transition,
     check_role_gating,
     resolve_claim_acquire,
     resolve_heartbeat,
@@ -29,6 +30,7 @@ from ._errors import ErrorCode, SubstrateError
 from ._integrity import SUBSTRATE_VERSION
 from ._keys import KeySet
 from ._signing import sign_event as _sign_event
+from ._signing import verify_event as _verify_event
 from ._types import (
     ActorRole,
     Claim,
@@ -426,6 +428,7 @@ class InMemorySubstrate:
         validate_work_item_exists(wi, work_item_id)
 
         if transition is not None:
+            check_reserved_transition(transition)
             wf_data = self._workflows.get((wi["workflow_name"], wi["workflow_version"]))
             if wf_data is not None:
                 check_append_blocked(
@@ -840,7 +843,7 @@ class InMemorySubstrate:
         claim = self._claims.get(work_item_id)
         validate_release(claim, actor_id, work_item_id)
 
-        del self._claims[work_item_id]
+        self._claims.pop(work_item_id, None)
         wi = self._work_items.get(work_item_id)
         if wi is not None:
             wi["claimed_by"] = None
@@ -1025,7 +1028,35 @@ class InMemorySubstrate:
             derived_not_before = None
             derived_last_seq = 0
             derived_attempt_number = 0
+            derived_claimed_by = None
             for evt in sorted(evts, key=lambda e: e.event_seq):
+                if self._key_set is not None:
+                    key_entry = None
+                    try:
+                        key_entry = self._key_set.verify_key_status(evt.key_id)
+                    except Exception:
+                        if continue_on_revoked:
+                            warnings += 1
+                            continue
+                        else:
+                            raise
+                    if key_entry is not None:
+                        if not _verify_event(
+                            event_id=evt.event_id,
+                            work_item_id=evt.work_item_id,
+                            actor_id=evt.actor_id,
+                            transition=evt.transition,
+                            payload=evt.payload,
+                            signature=evt.signature,
+                            canonical_hash=evt.payload_canonical_hash,
+                            key=key_entry.secret,
+                            stored_envelope=evt.canonical_envelope,
+                        ):
+                            raise SubstrateError(
+                                ErrorCode.REPLAY_HALTED,
+                                f"Signature verification failed for event {evt.event_id} "
+                                f"at seq {evt.event_seq}",
+                            )
                 derived_last_seq = evt.event_seq
                 if evt.transition == "created":
                     p = evt.payload or {}
@@ -1042,6 +1073,14 @@ class InMemorySubstrate:
                                         "hook_dead_lettered"):
                     if evt.transition in ("claim_acquired", "claim_stolen"):
                         derived_attempt_number += 1
+                    if evt.transition == "claim_acquired":
+                        p = evt.payload or {}
+                        derived_claimed_by = p.get("actor_id")
+                    elif evt.transition == "claim_stolen":
+                        p = evt.payload or {}
+                        derived_claimed_by = p.get("new_actor_id")
+                    elif evt.transition in ("claim_released", "claim_expired"):
+                        derived_claimed_by = None
                 elif evt.transition == "escalated":
                     derived_needs_review = True
                 elif evt.transition == "not_before_set":
@@ -1064,6 +1103,7 @@ class InMemorySubstrate:
                         p = evt.payload or {}
                         if "custom_fields_update" in p:
                             derived_fields = {**derived_fields, **p["custom_fields_update"]}
+                        derived_claimed_by = None
 
             if derived_state is not None:
                 if (
@@ -1073,6 +1113,7 @@ class InMemorySubstrate:
                     or derived_not_before != wi.get("not_before")
                     or derived_last_seq != wi.get("last_event_seq", 0)
                     or derived_attempt_number != wi.get("attempt_number", 0)
+                    or derived_claimed_by != wi.get("claimed_by")
                 ):
                     drift += 1
                 else:
