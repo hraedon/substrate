@@ -39,6 +39,16 @@ _(none)_
 
 | # | Title | Severity | Resolution |
 |---|---|---|---|
+| 138 | InMemory create_link drops empty dict payload via truthiness check | low | Changed `if payload:` to `if payload is not None:` |
+| 137 | InMemory hook_queue entry IDs can collide after poll_hooks cleanup | medium | Replaced with monotonically increasing counter |
+| 136 | InMemory read_events sort order diverges from Postgres for time-range queries | medium | Fixed ascending sort for time-range queries, added event_seq tiebreaker |
+| 135 | validate_not_before raises TypeError on naive/aware datetime mismatch | medium | Added timezone normalization matching validate_not_before_delta |
+| 134 | Postgres event INSERT can raise raw UniqueViolation on concurrent event_id collision | medium | Wrapped INSERTs in try/except UniqueViolation |
+| 133 | InMemory replay aborts on first error instead of per-work-item error handling | high | Added per-work-item try/except, REPLAY_HALTED for missing workflows and state violations |
+| 132 | InMemory requeue_dead_lettered_hook loses transition and payload data | high | Added transition to dead-letter dict; requeue reads directly from entry |
+| 131 | InMemory sweep_expired_claims unconditionally clears claimed_by without steal detection | high | Already fixed by BC-114; InMemory sweep now checks `claimed_by` and `claim_expires_at` match before clearing |
+| 130 | Replay does not derive claim_expires_at, latent drift risk | medium | Derivation implemented by GLM-3 (Session 24); `_states_match` intentionally excludes `claim_expires_at` because heartbeats mutate it without events |
+| 129 | InMemory _append_claim_event and _append_simple_event bypass idempotency | critical | Already fixed by BC-116 in Session 24; both helpers call `check_idempotency()` at top |
 | 127 | Replay temp-table cleanup is transactional | medium | Moved `drop_old_replay_tables` out of `_replay` transaction into `Substrate.replay()` pre-step with raw connection + commit |
 | 126 | Dead-letter requeue loses original max_retries | medium | Migration 008 adds `max_retries INTEGER` to `hook_dead_letter`; wired through `_move_to_dead_letter`, `requeue_dead_lettered_hook`, and InMemory equivalents |
 | 125 | InMemory missing input validation on several paths | medium | Added `validate_event_id` and `validate_not_before_delta` to InMemory `create_work_item`, `acquire_claim`, `release_claim`, `create_link`, `remove_link`, `update_not_before` |
@@ -59,20 +69,6 @@ _(none)_
 | 110 | custom_fields merge in append_transition_event is shallow, not deep | medium | Accepted — shallow merge by design; predictable, consumers include full nested structures |
 | 109 | synchronous_commit configure callback raises silently on connection failure | medium | Rejected — false alarm; psycopg pool discards connections if configure raises |
 | 108 | (empty entry — no BC-108 in tree) | n/a | n/a |
-| 107 | validate_work_item_refs propagates unhandled ValueError from uuid.UUID() | medium | Fixed; wrapped in try/except, raises `SubstrateError(CUSTOM_FIELD_VIOLATION)` |
-|---|---|---|---|
-| 113 | Jsonb() wrapper type would replace fragile per-entry-point validation | low | Implemented — Jsonb frozen dataclass validates on construction; internal functions accept Jsonb | None; public API wraps dict | None at boundary |
-| 083 | No uniqueness checks on state/transition/type names | medium | Accepted — deduplication is deterministic; error surfaces at runtime |
-| 112 | Sync validator row-lock DoS — operational hardening | medium | Implemented — statement_timeout, AST I/O detection, near-timeout watchdog |
-| 082 | Default values not type-checked at workflow registration | medium | Accepted — late validation surfaces error at creation time |
-| 079 | Replay skips work items with zero events silently | medium | Accepted — zero-event items are already corrupt beyond replay's scope |
-| 074 | continue_on_revoked=True skips signature verification entirely | high | Fixed; separated key lookup from status check; revoked keys now verify signature, only unknown keys skip |
-| 070 | Replay temp tables accumulate between replay() calls | low | Accepted — tables cleaned at next replay; dropping would break API contract |
-| 068 | validate_field_values takes WorkflowDefinition but validate_field_update takes raw dict | low | Accepted — raw dict avoids allocation in hot transition path |
-| 065 | HookConsumer nested transaction risk with append_event under savepoints | low | Accepted — nested savepoints are standard Postgres; low probability in practice |
-| 111 | JSON Schema permits additionalProperties:true everywhere — workflow isolation unclear | medium | Rejected — false alarm; schema already has `additionalProperties: false` at every level |
-| 110 | custom_fields merge in append_transition_event is shallow, not deep | medium | Accepted — shallow merge by design; predictable, consumers include full nested structures |
-| 109 | synchronous_commit configure callback raises silently on connection failure | medium | Rejected — false alarm; psycopg pool discards connections if configure raises |
 | 107 | validate_work_item_refs propagates unhandled ValueError from uuid.UUID() | medium | Fixed; wrapped in try/except, raises `SubstrateError(CUSTOM_FIELD_VIOLATION)` |
 | 106 | Unbounded not_before allows permanent work-item DOS | high | Fixed; added `validate_not_before_delta()` with 365-day max |
 | 105 | Replay skip of revoked-key events with continue_on_revoked=True leaves bad events in log | high | Accepted — events are immutable audit trail by design |
@@ -97,18 +93,25 @@ _(none)_
 | 086 | validate_json_safe_value silently passes non-JSON types | medium | Added else clause raising INVALID_ARGUMENT for set, bytes, tuple, Decimal, etc. |
 | 085 | close() is not idempotent | medium | Added None guard on `self._mgr`; second call is a no-op |
 | 084 | Empty enum_values array accepted | medium | Added `minItems: 1` to JSON Schema for enum_values |
+| 083 | No uniqueness checks on state/transition/type names | medium | Accepted — deduplication is deterministic; error surfaces at runtime |
+| 082 | Default values not type-checked at workflow registration | medium | Accepted — late validation surfaces error at creation time |
 | 081 | check_idempotency actor_id type annotation wrong | medium | Changed `actor_id: str` to `actor_id: str \| None` |
 | 080 | Idempotency check does not verify work_item_id | medium | Added `work_item_id` param to `check_idempotency`; verifies match when provided |
+| 079 | Replay skips work items with zero events silently | medium | Accepted — zero-event items are already corrupt beyond replay's scope |
 | 078 | InMemory requeue_dead_lettered_hook loses work_item_id | medium | Store `work_item_id` at top level in dead-letter; use it directly on requeue |
 | 077 | Missing validate_ttl in resolve_claim_acquire | high | Added `validate_ttl(ttl_seconds)` at top of `resolve_claim_acquire` |
 | 076 | JSON-typed custom fields bypass validate_json_safe_value | high | Added `validate_json_safe_value` call in the json branch of `_coerce_field` |
 | 075 | create_project and __init__ leak connection pool on failure | high | `create_project`: try/finally; `__init__`: try/except with `mgr.close()` on failure |
+| 074 | continue_on_revoked=True skips signature verification entirely | high | Fixed; separated key lookup from status check; revoked keys now verify signature, only unknown keys skip |
 | 073 | InMemory read_events returns oldest events; Postgres returns newest | high | Fixed InMemory to sort DESC, take limit, reverse (matching Postgres) |
 | 072 | Replay silently swallows unrecognized transitions with custom_fields_update | critical | Only apply custom_fields_update when transition matches workflow definition |
 | 071 | Heartbeat revives expired claims (zombie revival) | critical | Added expiry check to `resolve_heartbeat`; expired claims now raise CLAIM_LOST |
+| 070 | Replay temp tables accumulate between replay() calls | low | Accepted — tables cleaned at next replay; dropping would break API contract |
 | 069 | __init__.py has excessive _types re-export boilerplate | low | Consolidated ~20 individual import blocks into 3 grouped blocks (`_contract`, `_events`, `_types`) |
+| 068 | validate_field_values takes WorkflowDefinition but validate_field_update takes raw dict | low | Accepted — raw dict avoids allocation in hot transition path |
 | 067 | _contract.py has no standalone unit tests | medium | Added `tests/test_contract.py` with 85 unit tests covering all 17 pure functions |
 | 066 | KeySet hot-reload TOCTOU between active_key_id check and access | low | `active_key()` now captures `keys`/`active_id` as locals before check+access |
+| 065 | HookConsumer nested transaction risk with append_event under savepoints | low | Accepted — nested savepoints are standard Postgres; low probability in practice |
 | 063 | Add optional prompt_template_hash field to ActorMetadata | low | Added `prompt_template_hash: str | None = None` to `ActorMetadata`; round-trip via `to_dict`/`from_dict`; 5 tests in `test_actor_metadata_contract.py` |
 | 062 | Single-source-of-truth backend contract — eliminate hand-maintained InMemorySubstrate parity | high | Added `_contract.py` with 20 pure validation/decision functions; both backends refactored to delegate; 5 property-based conformance tests via hypothesis (Option A + B) |
 | 061 | Provide a workflow-yaml validator that does not require a live database | low | Added `validate_yaml(path_or_string) -> ValidationResult` to `_workflow.py`; exposed via `substrate.validate_yaml` and `substrate.testing.validate_yaml`; 11 tests in `test_validate_yaml.py` |

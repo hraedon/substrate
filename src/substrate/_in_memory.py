@@ -147,6 +147,7 @@ class InMemorySubstrate:
         self._validators: dict[str, Callable] = {}
         self._hook_handlers: dict[str, Callable] = {}
         self._hook_queue: list[dict] = []
+        self._hook_id_counter = 0
         self._dead_letter: dict[int, dict] = {}
         self._hook_consumer_running = False
 
@@ -219,6 +220,7 @@ class InMemorySubstrate:
             "work_item_id": entry.get("work_item_id"),
             "hook_name": entry["hook_name"],
             "hook_type": entry.get("hook_type", "async"),
+            "transition": entry.get("transition"),
             "payload": entry.get("payload"),
             "retry_count": entry.get("retry_count", 0),
             "max_retries": entry.get("max_retries", 3),
@@ -611,8 +613,9 @@ class InMemorySubstrate:
             hook_defaults = wf_data.get("hook_defaults") or {}
             max_retries = hook_defaults.get("max_retries", 3)
             for hn in hook_names:
+                self._hook_id_counter += 1
                 self._hook_queue.append({
-                    "id": len(self._hook_queue) + 1,
+                    "id": self._hook_id_counter,
                     "event_id": event_id,
                     "work_item_id": work_item_id,
                     "hook_name": hn,
@@ -661,14 +664,17 @@ class InMemorySubstrate:
                 evts = [e for e in evts if e.transition == transition]
             if start is not None and end is not None:
                 evts = [e for e in evts if start <= e.timestamp <= end]
-            evts.sort(key=lambda e: (e.timestamp, e.event_seq), reverse=True)
+            if start is not None and end is not None:
+                evts.sort(key=lambda e: (e.timestamp, e.event_seq))
+            else:
+                evts.sort(key=lambda e: (e.timestamp, e.event_seq), reverse=True)
             return evts[:limit]
         if start is not None and end is not None:
             evts = [e for el in self._events.values() for e in el]
             evts = [e for e in evts if start <= e.timestamp <= end]
             if transition is not None:
                 evts = [e for e in evts if e.transition == transition]
-            evts.sort(key=lambda e: e.timestamp)
+            evts.sort(key=lambda e: (e.timestamp, e.event_seq))
             return evts[:limit]
         if transition is not None:
             evts = [e for el in self._events.values() for e in el]
@@ -950,7 +956,7 @@ class InMemorySubstrate:
             "to_work_item_id": str(to_work_item_id),
             "link_type": link_type,
         }
-        if payload:
+        if payload is not None:
             link_payload["link_payload"] = payload
 
         self._append_simple_event(
@@ -1060,93 +1066,113 @@ class InMemorySubstrate:
             evts = self._events.get(wi_id, [])
             if not evts:
                 continue
-            derived_state = None
-            derived_fields: dict = {}
-            derived_needs_review = False
-            derived_not_before = None
-            derived_last_seq = 0
-            derived_attempt_number = 0
-            derived_claimed_by = None
-            for evt in sorted(evts, key=lambda e: e.event_seq):
-                if self._key_set is not None:
-                    key_entry = None
-                    try:
-                        key_entry = self._key_set.verify_key_status(evt.key_id)
-                    except SubstrateError as e:
-                        if e.code == ErrorCode.REVOKED_KEY_ID and continue_on_revoked:
-                            key_entry = self._key_set.get_key(evt.key_id)
-                            warnings += 1
-                        elif e.code == ErrorCode.UNKNOWN_KEY_ID and continue_on_revoked:
-                            warnings += 1
+            try:
+                derived_state = None
+                derived_fields: dict = {}
+                derived_needs_review = False
+                derived_not_before = None
+                derived_last_seq = 0
+                derived_attempt_number = 0
+                derived_claimed_by = None
+                for evt in sorted(evts, key=lambda e: e.event_seq):
+                    if self._key_set is not None:
+                        key_entry = None
+                        try:
+                            key_entry = self._key_set.verify_key_status(evt.key_id)
+                        except SubstrateError as e:
+                            if e.code == ErrorCode.REVOKED_KEY_ID and continue_on_revoked:
+                                key_entry = self._key_set.get_key(evt.key_id)
+                                warnings += 1
+                            elif e.code == ErrorCode.UNKNOWN_KEY_ID and continue_on_revoked:
+                                warnings += 1
+                            else:
+                                raise
+                        if key_entry is not None:
+                            if not _verify_event(
+                                event_id=evt.event_id,
+                                work_item_id=evt.work_item_id,
+                                actor_id=evt.actor_id,
+                                transition=evt.transition,
+                                payload=evt.payload,
+                                signature=evt.signature,
+                                canonical_hash=evt.payload_canonical_hash,
+                                key=key_entry.secret,
+                                stored_envelope=evt.canonical_envelope,
+                            ):
+                                raise SubstrateError(
+                                    ErrorCode.REPLAY_HALTED,
+                                    f"Signature verification failed for event {evt.event_id} "
+                                    f"at seq {evt.event_seq}",
+                                )
+                    derived_last_seq = evt.event_seq
+                    if evt.transition == "created":
+                        p = evt.payload or {}
+                        derived_state = p.get("initial_state")
+                        derived_fields = p.get("custom_fields", {})
+                        nb = p.get("not_before")
+                        if nb:
+                            derived_not_before = (
+                                datetime.fromisoformat(nb)
+                                if isinstance(nb, str) else nb
+                            )
+                    elif evt.transition in ("claim_acquired", "claim_released", "claim_expired",
+                                            "claim_stolen", "link_created", "link_removed",
+                                            "hook_dead_lettered"):
+                        if evt.transition in ("claim_acquired", "claim_stolen"):
+                            derived_attempt_number += 1
+                        if evt.transition == "claim_acquired":
+                            p = evt.payload or {}
+                            derived_claimed_by = p.get("actor_id")
+                        elif evt.transition == "claim_stolen":
+                            p = evt.payload or {}
+                            derived_claimed_by = p.get("new_actor_id")
+                        elif evt.transition in ("claim_released", "claim_expired"):
+                            derived_claimed_by = None
+                    elif evt.transition == "escalated":
+                        derived_needs_review = True
+                    elif evt.transition == "not_before_set":
+                        p = evt.payload or {}
+                        nb = p.get("not_before")
+                        if nb:
+                            derived_not_before = (
+                                datetime.fromisoformat(nb)
+                                if isinstance(nb, str) else nb
+                            )
                         else:
-                            raise
-                    if key_entry is not None:
-                        if not _verify_event(
-                            event_id=evt.event_id,
-                            work_item_id=evt.work_item_id,
-                            actor_id=evt.actor_id,
-                            transition=evt.transition,
-                            payload=evt.payload,
-                            signature=evt.signature,
-                            canonical_hash=evt.payload_canonical_hash,
-                            key=key_entry.secret,
-                            stored_envelope=evt.canonical_envelope,
-                        ):
+                            derived_not_before = None
+                    else:
+                        wf_data = self._workflows.get((wi["workflow_name"], wi["workflow_version"]))
+                        if wf_data is None:
                             raise SubstrateError(
                                 ErrorCode.REPLAY_HALTED,
-                                f"Signature verification failed for event {evt.event_id} "
-                                f"at seq {evt.event_seq}",
+                                f"Missing workflow {wi['workflow_name']!r} "
+                                f"v{wi['workflow_version']}",
                             )
-                derived_last_seq = evt.event_seq
-                if evt.transition == "created":
-                    p = evt.payload or {}
-                    derived_state = p.get("initial_state")
-                    derived_fields = p.get("custom_fields", {})
-                    nb = p.get("not_before")
-                    if nb:
-                        derived_not_before = (
-                            datetime.fromisoformat(nb)
-                            if isinstance(nb, str) else nb
-                        )
-                elif evt.transition in ("claim_acquired", "claim_released", "claim_expired",
-                                        "claim_stolen", "link_created", "link_removed",
-                                        "hook_dead_lettered"):
-                    if evt.transition in ("claim_acquired", "claim_stolen"):
-                        derived_attempt_number += 1
-                    if evt.transition == "claim_acquired":
-                        p = evt.payload or {}
-                        derived_claimed_by = p.get("actor_id")
-                    elif evt.transition == "claim_stolen":
-                        p = evt.payload or {}
-                        derived_claimed_by = p.get("new_actor_id")
-                    elif evt.transition in ("claim_released", "claim_expired"):
-                        derived_claimed_by = None
-                elif evt.transition == "escalated":
-                    derived_needs_review = True
-                elif evt.transition == "not_before_set":
-                    p = evt.payload or {}
-                    nb = p.get("not_before")
-                    if nb:
-                        derived_not_before = (
-                            datetime.fromisoformat(nb)
-                            if isinstance(nb, str) else nb
-                        )
-                    else:
-                        derived_not_before = None
-                else:
-                    wf_data = self._workflows.get((wi["workflow_name"], wi["workflow_version"]))
-                    found = False
-                    if wf_data:
+                        found = False
                         for t in wf_data.get("transitions", []):
                             if t["name"] == evt.transition and t["from_state"] == derived_state:
                                 derived_state = t["to_state"]
                                 found = True
                                 break
-                    if found:
-                        p = evt.payload or {}
-                        if "custom_fields_update" in p:
-                            derived_fields = {**derived_fields, **p["custom_fields_update"]}
-                        derived_claimed_by = None
+                        if not found:
+                            name_matches = any(
+                                t["name"] == evt.transition for t in wf_data.get("transitions", [])
+                            )
+                            if name_matches:
+                                raise SubstrateError(
+                                    ErrorCode.REPLAY_HALTED,
+                                    f"Transition {evt.transition!r} exists but not valid "
+                                    f"from state {derived_state!r}",
+                                )
+                        if found:
+                            p = evt.payload or {}
+                            if "custom_fields_update" in p:
+                                derived_fields = {**derived_fields, **p["custom_fields_update"]}
+                            derived_claimed_by = None
+            except SubstrateError:
+                halted += 1
+            except Exception:
+                halted += 1
 
             if derived_state is not None:
                 if (
@@ -1177,15 +1203,16 @@ class InMemorySubstrate:
                 ErrorCode.HOOK_NOT_FOUND,
                 f"Dead letter entry {dead_letter_id} not found",
             )
-        payload = entry.get("payload") or {}
+        max_id = max(self._hook_id_counter, entry.get("original_hook_queue_id", 0))
+        self._hook_id_counter = max_id + 1
         self._hook_queue.append({
-            "id": entry["original_hook_queue_id"] or len(self._hook_queue) + 1,
+            "id": entry["original_hook_queue_id"] or self._hook_id_counter,
             "event_id": entry["event_id"],
             "work_item_id": entry.get("work_item_id"),
             "hook_name": entry["hook_name"],
             "hook_type": entry["hook_type"],
-            "transition": payload.get("transition"),
-            "payload": payload.get("event_payload"),
+            "transition": entry.get("transition"),
+            "payload": entry.get("payload"),
             "retry_count": 0,
             "max_retries": entry.get("max_retries", 3),
             "status": "pending",

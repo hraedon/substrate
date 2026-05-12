@@ -76,11 +76,14 @@ def validate_ttl(ttl_seconds: int) -> None:
 
 
 def validate_not_before(not_before: datetime | None, now: datetime) -> None:
-    if not_before is not None and not_before > now:
-        raise SubstrateError(
-            ErrorCode.NOT_BEFORE_FUTURE,
-            f"Work item not_before is {not_before.isoformat()}, cannot claim yet",
-        )
+    if not_before is not None:
+        nb_utc = not_before if not_before.tzinfo else not_before.replace(tzinfo=UTC)
+        now_utc = now if now.tzinfo else now.replace(tzinfo=UTC)
+        if nb_utc > now_utc:
+            raise SubstrateError(
+                ErrorCode.NOT_BEFORE_FUTURE,
+                f"Work item not_before is {not_before.isoformat()}, cannot claim yet",
+            )
 
 
 def resolve_transition(

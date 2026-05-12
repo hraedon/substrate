@@ -133,31 +133,37 @@ def append_event(
     )
 
     event_seq = next_seq
-    row = conn.execute(
-        SQL(
-            "INSERT INTO events (event_id, work_item_id, event_seq, actor_id, actor_kind, "
-            "actor_metadata, key_id, workflow_name, workflow_version, "
-            "transition, payload, payload_canonical_hash, signature, canonical_envelope) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
-            "RETURNING timestamp"
-        ),
-        [
-            event_id,
-            work_item_id,
-            event_seq,
-            actor_id,
-            actor_kind,
-            psycopg.types.json.Jsonb(am) if am is not None else None,
-            key_id,
-            workflow_name,
-            workflow_version,
-            transition,
-            psycopg.types.json.Jsonb(pl) if pl is not None else None,
-            canonical_hash,
-            signature,
-            canonical_envelope,
-        ],
-    ).fetchone()
+    try:
+        row = conn.execute(
+            SQL(
+                "INSERT INTO events (event_id, work_item_id, event_seq, actor_id, actor_kind, "
+                "actor_metadata, key_id, workflow_name, workflow_version, "
+                "transition, payload, payload_canonical_hash, signature, canonical_envelope) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+                "RETURNING timestamp"
+            ),
+            [
+                event_id,
+                work_item_id,
+                event_seq,
+                actor_id,
+                actor_kind,
+                psycopg.types.json.Jsonb(am) if am is not None else None,
+                key_id,
+                workflow_name,
+                workflow_version,
+                transition,
+                psycopg.types.json.Jsonb(pl) if pl is not None else None,
+                canonical_hash,
+                signature,
+                canonical_envelope,
+            ],
+        ).fetchone()
+    except psycopg.errors.UniqueViolation:
+        raise SubstrateError(
+            ErrorCode.IDEMPOTENCY_COLLISION_WITH_DIFFERENT_PAYLOAD,
+            f"event_id {event_id} already exists",
+        )
 
     conn.execute(
         SQL(
@@ -244,31 +250,37 @@ def append_transition_event(
     workflow_name = wi_row["workflow_name"]
     workflow_version = wi_row["workflow_version"]
 
-    row = conn.execute(
-        SQL(
-            "INSERT INTO events (event_id, work_item_id, event_seq, actor_id, actor_kind, "
-            "actor_metadata, key_id, workflow_name, workflow_version, "
-            "transition, payload, payload_canonical_hash, signature, canonical_envelope) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
-            "RETURNING timestamp"
-        ),
-        [
-            event_id,
-            work_item_id,
-            event_seq,
-            actor_id,
-            actor_kind,
-            psycopg.types.json.Jsonb(am) if am is not None else None,
-            key_id,
-            workflow_name,
-            workflow_version,
-            transition_name,
-            psycopg.types.json.Jsonb(stored_payload) if stored_payload is not None else None,
-            canonical_hash,
-            signature,
-            canonical_envelope,
-        ],
-    ).fetchone()
+    try:
+        row = conn.execute(
+            SQL(
+                "INSERT INTO events (event_id, work_item_id, event_seq, actor_id, actor_kind, "
+                "actor_metadata, key_id, workflow_name, workflow_version, "
+                "transition, payload, payload_canonical_hash, signature, canonical_envelope) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+                "RETURNING timestamp"
+            ),
+            [
+                event_id,
+                work_item_id,
+                event_seq,
+                actor_id,
+                actor_kind,
+                psycopg.types.json.Jsonb(am) if am is not None else None,
+                key_id,
+                workflow_name,
+                workflow_version,
+                transition_name,
+                psycopg.types.json.Jsonb(stored_payload) if stored_payload is not None else None,
+                canonical_hash,
+                signature,
+                canonical_envelope,
+            ],
+        ).fetchone()
+    except psycopg.errors.UniqueViolation:
+        raise SubstrateError(
+            ErrorCode.IDEMPOTENCY_COLLISION_WITH_DIFFERENT_PAYLOAD,
+            f"event_id {event_id} already exists",
+        )
 
     merged_fields = wi_row["custom_fields"]
     if custom_fields_update:

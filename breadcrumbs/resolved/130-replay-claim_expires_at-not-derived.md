@@ -2,10 +2,11 @@
 number: "130"
 title: Replay does not derive claim_expires_at, latent drift risk
 severity: medium
-status: proposed
+status: resolved
 kind: design
 author: claude-opus
 date: "2026-05-12"
+resolved_date: "2026-05-12"
 tags: [replay, claims]
 related: ["090"]
 ---
@@ -16,12 +17,8 @@ related: ["090"]
 
 Currently latent: any work item with an active claim will have a non-NULL `claim_expires_at` in the live projection but `NULL` in the replayed row, but since `_states_match` doesn't check it, no drift is reported. If `_states_match` were ever extended to check `claim_expires_at`, every replay with an active claim would falsely report drift.
 
-## Impact
+## Resolution
 
-Replay completeness gap. Claim timing information is lost in replay, making `claim_expires_at` unverifiable. The `_states_match` function is incomplete by omission.
+Option 1 (derive) implemented by GLM-3 in Session 24: `_replay_work_item` now derives `claim_expires_at` from claim_acquired/claim_stolen event payloads. The replay output table stores the derived value.
 
-## Fix
-
-Either:
-1. Derive `claim_expires_at` from claim_acquired/claim_stolen/claim_heartbeat events in `_replay_work_item` and include it in `_states_match`, or
-2. Document the omission as intentional (claim expiry is a runtime concern, not an audit concern) and add `claim_expires_at` to the diff fields explicitly excluded from replay comparison.
+`_states_match` intentionally does NOT compare `claim_expires_at` because heartbeats mutate it without emitting events, so the replay-derived value may differ from the live value. This is the correct tradeoff: derivation provides completeness for the output table, while drift comparison stays limited to fields fully derivable from the event log.
