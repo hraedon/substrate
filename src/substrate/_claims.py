@@ -291,7 +291,7 @@ def sweep_expired_claims(conn: psycopg.Connection, key_set: KeySet) -> int:
 
         wi = lock_work_item(conn, wi_id)
 
-        conn.execute(
+        cur = conn.execute(
             SQL(
                 "UPDATE work_items_current SET claimed_by = NULL, claim_expires_at = NULL "
                 "WHERE work_item_id = %s AND claimed_by = %s"
@@ -299,7 +299,7 @@ def sweep_expired_claims(conn: psycopg.Connection, key_set: KeySet) -> int:
             [wi_id, prior_actor_id],
         )
 
-        if wi is not None:
+        if cur.rowcount > 0 and wi is not None:
             append_event(
                 conn=conn,
                 work_item_id=wi_id,

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 
 import psycopg.types.json
@@ -25,19 +25,10 @@ from ._contract import (
     resolve_transition as _resolve_transition,
 )
 from ._contract import (
-    validate_actor_kind as _validate_actor_kind,
-)
-from ._contract import (
-    validate_event_id as _validate_event_id,
-)
-from ._contract import (
-    validate_not_before_delta as _validate_not_before_delta,
+    validate_mutation_params as _validate_mutation_params,
 )
 from ._contract import (
     validate_read_events_filters as _validate_read_events_filters,
-)
-from ._contract import (
-    validate_ttl as _validate_ttl,
 )
 from ._errors import ErrorCode, SubstrateError
 from ._events import (
@@ -138,6 +129,7 @@ class Substrate:
             self._validators: dict[str, Callable] = {}
             self._hook_handlers: dict[str, Callable] = {}
             self._hook_channel = f"substrate_hooks_{self._mgr.schema}"
+            self._hook_consumer = None
             from ._hooks import HookConsumer
 
             self._hook_consumer = HookConsumer(
@@ -197,7 +189,7 @@ class Substrate:
 
     def close(self) -> None:
         """Stop hook consumer (if running) and release the connection pool."""
-        if self._hook_consumer.is_running:
+        if self._hook_consumer is not None and self._hook_consumer.is_running:
             self._hook_consumer.stop()
         if self._mgr is not None:
             self._mgr.close()
@@ -419,9 +411,11 @@ class Substrate:
         """
         timer = OpTimer(self._project, "create_work_item")
         try:
-            _validate_actor_kind(actor_kind)
-            if event_id is not None:
-                _validate_event_id(event_id)
+            _validate_mutation_params(
+                actor_kind=actor_kind,
+                event_id=event_id,
+                not_before=not_before,
+            )
             from ._work_items import create_work_item as _create
 
             with self._mgr.transaction() as conn:
@@ -484,11 +478,12 @@ class Substrate:
         """
         timer = OpTimer(self._project, "append_event")
         try:
-            _validate_actor_kind(actor_kind)
             if event_id is None:
                 event_id = uuid.uuid4()
-            else:
-                _validate_event_id(event_id)
+            _validate_mutation_params(
+                actor_kind=actor_kind,
+                event_id=event_id,
+            )
 
             with self._mgr.transaction() as conn:
                 wi_row = conn.execute(
@@ -579,11 +574,12 @@ class Substrate:
         """
         timer = OpTimer(self._project, "transition")
         try:
-            _validate_actor_kind(actor_kind)
             if event_id is None:
                 event_id = uuid.uuid4()
-            else:
-                _validate_event_id(event_id)
+            _validate_mutation_params(
+                actor_kind=actor_kind,
+                event_id=event_id,
+            )
 
             with self._mgr.transaction() as conn:
                 wi_row = conn.execute(
@@ -887,10 +883,11 @@ class Substrate:
             SubstrateError: ``CLAIM_CONTESTED``, ``NOT_BEFORE_FUTURE``,
                 ``WORK_ITEM_NOT_FOUND``, ``INVALID_ARGUMENT``.
         """
-        _validate_actor_kind(actor_kind)
-        _validate_ttl(ttl_seconds)
-        if event_id is not None:
-            _validate_event_id(event_id)
+        _validate_mutation_params(
+            actor_kind=actor_kind,
+            event_id=event_id,
+            ttl_seconds=ttl_seconds,
+        )
         from ._claims import acquire_claim as _acquire
 
         timer = OpTimer(self._project, "acquire_claim")
@@ -941,7 +938,7 @@ class Substrate:
             SubstrateError: ``CLAIM_LOST``, ``CLAIM_NOT_FOUND``,
                 ``INVALID_ARGUMENT``.
         """
-        _validate_ttl(ttl_seconds)
+        _validate_mutation_params(ttl_seconds=ttl_seconds)
         from ._claims import heartbeat_claim as _heartbeat
 
         timer = OpTimer(self._project, "heartbeat_claim")
@@ -977,9 +974,10 @@ class Substrate:
         Raises:
             SubstrateError: ``CLAIM_LOST``, ``CLAIM_NOT_FOUND``.
         """
-        _validate_actor_kind(actor_kind)
-        if event_id is not None:
-            _validate_event_id(event_id)
+        _validate_mutation_params(
+            actor_kind=actor_kind,
+            event_id=event_id,
+        )
         from ._claims import release_claim as _release
 
         timer = OpTimer(self._project, "release_claim")
@@ -1041,9 +1039,10 @@ class Substrate:
 
         timer = OpTimer(self._project, "create_link")
         try:
-            _validate_actor_kind(actor_kind)
-            if event_id is not None:
-                _validate_event_id(event_id)
+            _validate_mutation_params(
+                actor_kind=actor_kind,
+                event_id=event_id,
+            )
             with self._mgr.transaction() as conn:
                 link = _create(
                     conn,
@@ -1094,9 +1093,10 @@ class Substrate:
 
         timer = OpTimer(self._project, "remove_link")
         try:
-            _validate_actor_kind(actor_kind)
-            if event_id is not None:
-                _validate_event_id(event_id)
+            _validate_mutation_params(
+                actor_kind=actor_kind,
+                event_id=event_id,
+            )
             with self._mgr.transaction() as conn:
                 _remove(
                     conn,
@@ -1126,7 +1126,16 @@ class Substrate:
         Returns:
             ``ReplayReport`` with counts of ok, drift, halted, and warnings.
         """
-        from ._replay import replay as _replay
+        from ._replay import (
+            drop_old_replay_tables,
+        )
+        from ._replay import (
+            replay as _replay,
+        )
+
+        with self._mgr.connect() as conn:
+            drop_old_replay_tables(conn, self._mgr.schema)
+            conn.commit()
 
         timer = OpTimer(self._project, "replay")
         try:
@@ -1237,14 +1246,13 @@ class Substrate:
 
         timer = OpTimer(self._project, "update_not_before")
         try:
-            _validate_actor_kind(actor_kind)
             if event_id is None:
                 event_id = uuid.uuid4()
-            else:
-                _validate_event_id(event_id)
-
-            if not_before is not None:
-                _validate_not_before_delta(not_before, datetime.now(UTC))
+            _validate_mutation_params(
+                actor_kind=actor_kind,
+                event_id=event_id,
+                not_before=not_before,
+            )
 
             with self._mgr.transaction() as conn:
                 wi = _lock(conn, work_item_id)

@@ -228,9 +228,9 @@ def _move_to_dead_letter(
     conn.execute(
         SQL(
             "INSERT INTO hook_dead_letter "
-            "(event_id, hook_name, hook_type, payload, retry_count, error_message, "
+            "(event_id, hook_name, hook_type, payload, retry_count, max_retries, error_message, "
             "original_hook_queue_id) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s)"
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"
         ),
         [
             hook_row["event_id"],
@@ -242,6 +242,7 @@ def _move_to_dead_letter(
                 else None
             ),
             hook_row["retry_count"],
+            hook_row.get("max_retries", 3),
             error_message,
             hook_row["id"],
         ],
@@ -303,12 +304,13 @@ def requeue_dead_lettered_hook(
         SQL(
             "INSERT INTO hook_queue "
             "(event_id, hook_name, hook_type, payload, retry_count, max_retries) "
-            "VALUES (%s, %s, 'async', %s, 0, 3)"
+            "VALUES (%s, %s, 'async', %s, 0, %s)"
         ),
         [
             row["event_id"],
             row["hook_name"],
             psycopg.types.json.Jsonb(row["payload"]) if row["payload"] else None,
+            row.get("max_retries", 3),
         ],
     )
 
@@ -417,11 +419,35 @@ class HookConsumer:
         reconnect_backoff_base = 2.0
         reconnect_attempts = 0
 
-        try:
-            conn = self._connect()
-        except Exception as e:
-            log.error("hooks.initial_connect_failed", error=str(e))
+        conn = None
+        while conn is None and not self._stop.is_set():
+            try:
+                conn = self._connect()
+            except Exception as e:
+                reconnect_attempts += 1
+                if reconnect_attempts > max_reconnect_attempts:
+                    log.error(
+                        "hooks.initial_connect_exhausted",
+                        attempts=reconnect_attempts,
+                        error=str(e),
+                    )
+                    return
+                backoff = min(
+                    reconnect_backoff_base * (2 ** (reconnect_attempts - 1)),
+                    60.0,
+                )
+                log.warning(
+                    "hooks.initial_connect_failed",
+                    attempt=reconnect_attempts,
+                    backoff=backoff,
+                    error=str(e),
+                )
+                time.sleep(backoff)
+
+        if conn is None:
             return
+
+        reconnect_attempts = 0
 
         try:
             while not self._stop.is_set():

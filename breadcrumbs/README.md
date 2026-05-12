@@ -31,11 +31,37 @@ _(none)_
 
 ## Open
 
-_(none)_
+| # | Title | Severity |
+|---|---|---|
+| 130 | Replay does not derive claim_expires_at, latent drift risk | medium |
+| 129 | InMemory _append_claim_event and _append_simple_event bypass idempotency | critical |
+| 128 | InMemory sweep_expired_claims unconditionally clears claimed_by without steal detection | high |
 
 ## Resolved
 
 | # | Title | Severity | Resolution |
+|---|---|---|---|
+| 127 | Replay temp-table cleanup is transactional | medium | Moved `drop_old_replay_tables` out of `_replay` transaction into `Substrate.replay()` pre-step with raw connection + commit |
+| 126 | Dead-letter requeue loses original max_retries | medium | Migration 008 adds `max_retries INTEGER` to `hook_dead_letter`; wired through `_move_to_dead_letter`, `requeue_dead_lettered_hook`, and InMemory equivalents |
+| 125 | InMemory missing input validation on several paths | medium | Added `validate_event_id` and `validate_not_before_delta` to InMemory `create_work_item`, `acquire_claim`, `release_claim`, `create_link`, `remove_link`, `update_not_before` |
+| 124 | InMemory register_validator/register_hook_handler mutate in-place | medium | Switched to copy-on-write pattern matching Postgres backend |
+| 123 | Workflow semantics do not reject duplicate transition/state/type names | high | Added `_require_unique` helper; duplicate state names, work_item_type names, role names, link_type names, transitions (name+from_state), and custom fields within a type now raise `WORKFLOW_SEMANTIC_ERROR` |
+| 122 | InMemory read_events returns empty list with no filters | high | Added default branch returning all events sorted by `(timestamp, event_seq)` DESC, matching Postgres |
+| 121 | Substrate.close unsafe on partially-constructed instances | high | Initialize `_hook_consumer = None` before the try block; guard `close()` with `is not None` check |
+| 120 | HookConsumer dies silently on initial connection failure | high | Wrapped initial connect in the same retry loop used for mid-flight reconnections |
+| 119 | validate_json_safe_value raises raw TypeError on non-string dict keys | high | Added `isinstance(value, str)` guard in `_check_string_safe` raising `SubstrateError(INVALID_ARGUMENT)` |
+| 118 | create_work_item does not bound not_before delta | high | Added `_validate_not_before_delta` in `create_work_item` API boundary for both Postgres and InMemory |
+| 117 | InMemory remove_link fallback logic broken | high | Changed fallback to scan events in reverse `event_seq` order and check the most recent event for the `(from, to, type)` tuple |
+| 116 | InMemory claim/link operations bypass idempotency checks | critical | Moved idempotency check into `_append_claim_event` and `_append_simple_event` helpers so all callers inherit it |
+| 115 | InMemory backend event_seq off-by-one vs Postgres on create_work_item | critical | InMemory `create_work_item` now emits `created` event with `event_seq = next_event_seq` (1) and updates `last_event_seq` / `next_event_seq` to match Postgres |
+| 114 | Sweep emits spurious claim_expired events causing replay drift | critical | Postgres `sweep_expired_claims` now checks `cur.rowcount > 0` before emitting the event; InMemory sweep checks `wi[claimed_by] == claim[actor_id]` before clearing |
+| 113 | Jsonb() wrapper type would replace fragile per-entry-point validation | low | Implemented — Jsonb frozen dataclass validates on construction; internal functions accept Jsonb | None; public API wraps dict | None at boundary |
+| 112 | Sync validator row-lock DoS — operational hardening | medium | Implemented — statement_timeout, AST I/O detection, near-timeout watchdog |
+| 111 | JSON Schema permits additionalProperties:true everywhere — workflow isolation unclear | medium | Rejected — false alarm; schema already has `additionalProperties: false` at every level |
+| 110 | custom_fields merge in append_transition_event is shallow, not deep | medium | Accepted — shallow merge by design; predictable, consumers include full nested structures |
+| 109 | synchronous_commit configure callback raises silently on connection failure | medium | Rejected — false alarm; psycopg pool discards connections if configure raises |
+| 108 | (empty entry — no BC-108 in tree) | n/a | n/a |
+| 107 | validate_work_item_refs propagates unhandled ValueError from uuid.UUID() | medium | Fixed; wrapped in try/except, raises `SubstrateError(CUSTOM_FIELD_VIOLATION)` |
 |---|---|---|---|
 | 113 | Jsonb() wrapper type would replace fragile per-entry-point validation | low | Implemented — Jsonb frozen dataclass validates on construction; internal functions accept Jsonb | None; public API wraps dict | None at boundary |
 | 083 | No uniqueness checks on state/transition/type names | medium | Accepted — deduplication is deterministic; error surfaces at runtime |

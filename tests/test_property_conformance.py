@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -29,7 +30,7 @@ ACTOR_ROLE_MAP = {"agent-1": "agent", "agent-2": "agent", "reviewer-1": "reviewe
 
 
 @st.composite
-def operation(draw):
+def operation(draw, seen_event_ids=None):
     kind = draw(
         st.sampled_from(
             [
@@ -84,6 +85,53 @@ def operation(draw):
             "idx": draw(st.integers(min_value=0, max_value=5)),
             "actor_id": draw(st.sampled_from(ACTOR_IDS)),
             "transition": draw(st.none() | st.text(min_size=1, max_size=10)),
+        }
+    return {"op": "sweep"}
+
+
+@st.composite
+def adversarial_operation(draw):
+    """Operations designed to trigger input-validation errors."""
+    kind = draw(
+        st.sampled_from(
+            [
+                "create_bad_event_id",
+                "create_bad_actor_kind",
+                "create_bad_not_before",
+                "claim_bad_ttl",
+            ]
+        )
+    )
+    if kind == "create_bad_event_id":
+        return {
+            "op": "create",
+            "work_item_type": draw(st.sampled_from(VALID_TYPES)),
+            "actor_id": draw(st.sampled_from(ACTOR_IDS)),
+            "title": draw(st.text(min_size=1, max_size=20)),
+            "event_id": uuid.uuid1(),
+        }
+    if kind == "create_bad_actor_kind":
+        return {
+            "op": "create",
+            "work_item_type": draw(st.sampled_from(VALID_TYPES)),
+            "actor_id": draw(st.sampled_from(ACTOR_IDS)),
+            "title": draw(st.text(min_size=1, max_size=20)),
+            "actor_kind": "bot",
+        }
+    if kind == "create_bad_not_before":
+        return {
+            "op": "create",
+            "work_item_type": draw(st.sampled_from(VALID_TYPES)),
+            "actor_id": draw(st.sampled_from(ACTOR_IDS)),
+            "title": draw(st.text(min_size=1, max_size=20)),
+            "not_before": draw(st.datetimes(min_value=datetime(2100, 1, 1))),
+        }
+    if kind == "claim_bad_ttl":
+        return {
+            "op": "claim",
+            "idx": draw(st.integers(min_value=0, max_value=5)),
+            "actor_id": draw(st.sampled_from(ACTOR_IDS)),
+            "ttl": draw(st.integers(min_value=-100, max_value=0)),
         }
     return {"op": "sweep"}
 
@@ -213,8 +261,63 @@ def _compare_state(real_items, mem_items):
             f"[{i}] attempt_number mismatch: "
             f"real={r.attempt_number} mem={m.attempt_number}"
         )
+        assert r.last_event_seq == m.last_event_seq, (
+            f"[{i}] last_event_seq mismatch: "
+            f"real={r.last_event_seq} mem={m.last_event_seq}"
+        )
         assert r.workflow_version == m.workflow_version
         assert r.work_item_type == m.work_item_type
+
+
+def _exec_op_adversarial(backend, op, work_items):
+    if op["op"] == "create":
+        role = ACTOR_ROLE_MAP.get(op["actor_id"], "agent")
+        actor_metadata = {"role": role}
+        if op["work_item_type"] == "feature":
+            custom_fields = {"title": op["title"]}
+        elif op["work_item_type"] == "bug":
+            custom_fields = {"severity": "minor"}
+        else:
+            custom_fields = {}
+        kwargs = {
+            "workflow_name": "test_workflow",
+            "work_item_type": op["work_item_type"],
+            "actor_id": op["actor_id"],
+            "actor_metadata": actor_metadata,
+            "custom_fields": custom_fields,
+        }
+        if "event_id" in op:
+            kwargs["event_id"] = op["event_id"]
+        if "actor_kind" in op:
+            kwargs["actor_kind"] = op["actor_kind"]
+        if "not_before" in op:
+            kwargs["not_before"] = op["not_before"]
+        try:
+            wi, _evt = backend.create_work_item(**kwargs)
+            work_items.append(wi)
+            return ("ok", "created", str(wi.work_item_id))
+        except SubstrateError as e:
+            return ("err", e.code)
+
+    idx = op.get("idx", 0)
+    if idx >= len(work_items):
+        return ("noop", "no_target")
+    wi = work_items[idx]
+    wi_id = wi.work_item_id
+
+    if op["op"] == "claim":
+        try:
+            claim = backend.acquire_claim(
+                wi_id, op["actor_id"], ttl_seconds=op["ttl"]
+            )
+            refreshed = backend.get_work_item(wi_id)
+            if refreshed:
+                work_items[idx] = refreshed
+            return ("ok", "claimed", str(claim.attempt_number))
+        except SubstrateError as e:
+            return ("err", e.code)
+
+    return ("noop", "unknown")
 
 
 @pytest.mark.slow
@@ -428,6 +531,38 @@ class TestPropertyBasedConformance:
                     f"Drift mismatch: real={real_report.replayed_drift} "
                     f"mem={mem_report.replayed_drift}"
                 )
+        finally:
+            real.close()
+            drop_project_schema(DSN, project)
+
+    @settings(
+        max_examples=100,
+        deadline=None,
+        suppress_health_check=[HealthCheck.too_slow],
+    )
+    @given(ops=st.lists(adversarial_operation(), max_size=20))
+    def test_adversarial_error_code_equivalence(self, ops):
+        """Both backends must reject invalid inputs with the same error code."""
+        from substrate import Substrate
+
+        project = f"prop_adv_{uuid.uuid4().hex[:8]}"
+        real = Substrate.create_project(DSN, project, KEY_PATH)
+        real.register_workflow(WORKFLOW_YAML)
+        mem = InMemorySubstrate(project="test")
+        mem.register_workflow(WORKFLOW_YAML)
+
+        real_items = []
+        mem_items = []
+
+        try:
+            for op in ops:
+                real_result = _exec_op_adversarial(real, op, real_items)
+                mem_result = _exec_op_adversarial(mem, op, mem_items)
+                if real_result[0] == "err" and mem_result[0] == "err":
+                    assert real_result[1] == mem_result[1], (
+                        f"Adversarial op {op['op']} diverged: "
+                        f"real={real_result[1]} mem={mem_result[1]}"
+                    )
         finally:
             real.close()
             drop_project_schema(DSN, project)

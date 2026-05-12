@@ -26,6 +26,18 @@ log = structlog.get_logger()
 
 _SCHEMA_PATH = Path(__file__).parent / "_workflow_schema.json"
 
+
+def _require_unique(items: list, label: str, key_fn=None) -> None:
+    from collections import Counter
+
+    keys = [key_fn(i) for i in items] if key_fn else items
+    dupes = [n for n, c in Counter(keys).items() if c > 1]
+    if dupes:
+        raise SubstrateError(
+            ErrorCode.WORKFLOW_SEMANTIC_ERROR,
+            f"Duplicate {label}: {sorted(dupes)}",
+        )
+
 _CLOSED_FIELD_TYPES = frozenset(
     {"string", "integer", "boolean", "timestamp", "json", "enum", "work_item_ref"}
 )
@@ -69,6 +81,23 @@ def _validate_semantics(data: dict) -> None:
     roles = {r["name"] for r in data.get("roles", [])}
     work_item_types = {t["name"] for t in data.get("work_item_types", [])}
     link_types = data.get("link_types", [])
+
+    _require_unique(data.get("states", []), "state names", key_fn=lambda s: s["name"])
+    _require_unique(
+        data.get("work_item_types", []), "work_item_type names", key_fn=lambda t: t["name"]
+    )
+    _require_unique(data.get("roles", []), "role names", key_fn=lambda r: r["name"])
+    _require_unique(link_types, "link_type names", key_fn=lambda lt: lt["name"])
+    _require_unique(
+        transitions, "transitions (name + from_state)", key_fn=lambda t: (t["name"], t["from"])
+    )
+
+    for wit in data.get("work_item_types", []):
+        _require_unique(
+            wit.get("custom_fields", []),
+            f"custom_fields in work_item_type {wit['name']!r}",
+            key_fn=lambda f: f["name"],
+        )
 
     if len(initial_states) != 1:
         raise SubstrateError(

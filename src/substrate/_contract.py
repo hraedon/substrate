@@ -321,6 +321,7 @@ def resolve_claim_acquire(
             "actor_id": actor_id,
             "ttl_seconds": ttl_seconds,
             "attempt_number": attempt_number,
+            "expires_at": expires_at.isoformat(),
         },
     )
 
@@ -435,6 +436,11 @@ class Jsonb:
 
 
 def _check_string_safe(value: str, label: str) -> None:
+    if not isinstance(value, str):
+        raise SubstrateError(
+            ErrorCode.INVALID_ARGUMENT,
+            f"{label} has unsupported type {type(value).__name__} for JSON serialization",
+        )
     if "\u0000" in value:
         raise SubstrateError(
             ErrorCode.INVALID_ARGUMENT,
@@ -446,6 +452,30 @@ def _check_string_safe(value: str, label: str) -> None:
                 ErrorCode.INVALID_ARGUMENT,
                 f"{label} contains unpaired surrogate U+{ord(ch):04X}",
             )
+
+
+def validate_mutation_params(
+    *,
+    actor_kind: str | None = None,
+    event_id: uuid.UUID | None = None,
+    not_before: datetime | None = None,
+    ttl_seconds: int | None = None,
+    now: datetime | None = None,
+) -> None:
+    """Shared boundary validation for all mutation entry points.
+
+    Call at the top of every public API method that accepts these
+    parameters.  Centralising here prevents InMemory/Postgres
+    divergence on input validation (GLM feedback, 2026-05-12).
+    """
+    if actor_kind is not None:
+        validate_actor_kind(actor_kind)
+    if event_id is not None:
+        validate_event_id(event_id)
+    if not_before is not None:
+        validate_not_before_delta(not_before, now or datetime.now(UTC))
+    if ttl_seconds is not None:
+        validate_ttl(ttl_seconds)
 
 
 def validate_work_item_exists(

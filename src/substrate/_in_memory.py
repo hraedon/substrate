@@ -18,13 +18,10 @@ from ._contract import (
     resolve_transition,
     should_escalate,
     validate_link_type,
+    validate_mutation_params,
     validate_read_events_filters,
     validate_release,
-    validate_ttl,
     validate_work_item_exists,
-)
-from ._contract import (
-    validate_actor_kind as _validate_actor_kind,
 )
 from ._errors import ErrorCode, SubstrateError
 from ._integrity import SUBSTRATE_VERSION
@@ -193,10 +190,14 @@ class InMemorySubstrate:
         from ._hooks import check_validator_io_safety
 
         check_validator_io_safety(handler, name)
-        self._validators[name] = handler
+        updated = dict(self._validators)
+        updated[name] = handler
+        self._validators = updated
 
     def register_hook_handler(self, name: str, handler: Callable) -> None:
-        self._hook_handlers[name] = handler
+        updated = dict(self._hook_handlers)
+        updated[name] = handler
+        self._hook_handlers = updated
 
     def start_hook_consumer(self) -> None:
         self._hook_consumer_running = True
@@ -220,6 +221,7 @@ class InMemorySubstrate:
             "hook_type": entry.get("hook_type", "async"),
             "payload": entry.get("payload"),
             "retry_count": entry.get("retry_count", 0),
+            "max_retries": entry.get("max_retries", 3),
             "error_message": error_message,
             "dead_lettered_at": entry["dead_lettered_at"],
             "original_hook_queue_id": entry["id"],
@@ -343,9 +345,13 @@ class InMemorySubstrate:
         not_before: datetime | None = None,
         event_id: uuid.UUID | None = None,
     ) -> tuple[WorkItem, Event]:
-        _validate_actor_kind(actor_kind)
         if event_id is None:
             event_id = uuid.uuid4()
+        validate_mutation_params(
+            actor_kind=actor_kind,
+            event_id=event_id,
+            not_before=not_before,
+        )
 
         wf_data, wf, version = self._resolve_wf_def(workflow_name)
 
@@ -388,7 +394,7 @@ class InMemorySubstrate:
         evt = _make_event(
             event_id=event_id,
             work_item_id=work_item_id,
-            event_seq=0,
+            event_seq=wi_state["next_event_seq"],
             actor_id=actor_id,
             actor_kind=actor_kind,
             actor_metadata=Jsonb(actor_metadata) if actor_metadata is not None else None,
@@ -407,6 +413,10 @@ class InMemorySubstrate:
         self._events.setdefault(work_item_id, []).append(evt)
         self._event_id_index[event_id] = evt
 
+        wi_state["last_event_seq"] = wi_state["next_event_seq"]
+        wi_state["last_event_at"] = now
+        wi_state["next_event_seq"] += 1
+
         return self._wi_to_work_item(wi_state), evt
 
     def append_event(
@@ -421,9 +431,12 @@ class InMemorySubstrate:
         event_id: uuid.UUID | None = None,
         expected_event_seq: int | None = None,
     ) -> Event:
-        _validate_actor_kind(actor_kind)
         if event_id is None:
             event_id = uuid.uuid4()
+        validate_mutation_params(
+            actor_kind=actor_kind,
+            event_id=event_id,
+        )
 
         wi = self._work_items.get(work_item_id)
         validate_work_item_exists(wi, work_item_id)
@@ -486,9 +499,12 @@ class InMemorySubstrate:
         event_id: uuid.UUID | None = None,
         expected_event_seq: int | None = None,
     ) -> Event:
-        _validate_actor_kind(actor_kind)
         if event_id is None:
             event_id = uuid.uuid4()
+        validate_mutation_params(
+            actor_kind=actor_kind,
+            event_id=event_id,
+        )
 
         wi = self._work_items.get(work_item_id)
         validate_work_item_exists(wi, work_item_id)
@@ -659,7 +675,9 @@ class InMemorySubstrate:
             evts = [e for e in evts if e.transition == transition]
             evts.sort(key=lambda e: (e.timestamp, e.event_seq), reverse=True)
             return evts[:limit]
-        return []
+        evts = [e for el in self._events.values() for e in el]
+        evts.sort(key=lambda e: (e.timestamp, e.event_seq), reverse=True)
+        return evts[:limit]
 
     def read_events_since(
         self,
@@ -744,8 +762,11 @@ class InMemorySubstrate:
         event_id: uuid.UUID | None = None,
         actor_kind: str = "agent",
     ) -> Claim:
-        _validate_actor_kind(actor_kind)
-        validate_ttl(ttl_seconds)
+        validate_mutation_params(
+            actor_kind=actor_kind,
+            event_id=event_id,
+            ttl_seconds=ttl_seconds,
+        )
 
         wi = self._work_items.get(work_item_id)
         validate_work_item_exists(wi, work_item_id)
@@ -804,6 +825,7 @@ class InMemorySubstrate:
         *,
         expected_attempt_number: int | None = None,
     ) -> Claim:
+        validate_mutation_params(ttl_seconds=ttl_seconds)
         now = datetime.now(UTC)
         claim = self._claims.get(work_item_id)
         claim_state = claim if claim is not None else None
@@ -838,7 +860,10 @@ class InMemorySubstrate:
         event_id: uuid.UUID | None = None,
         actor_kind: str = "agent",
     ) -> None:
-        _validate_actor_kind(actor_kind)
+        validate_mutation_params(
+            actor_kind=actor_kind,
+            event_id=event_id,
+        )
         claim = self._claims.get(work_item_id)
         validate_release(claim, actor_id, work_item_id)
 
@@ -864,13 +889,17 @@ class InMemorySubstrate:
             del self._claims[wid]
             wi = self._work_items.get(wid)
             if wi is not None:
-                wi["claimed_by"] = None
-                wi["claim_expires_at"] = None
-                self._append_claim_event(
-                    wi, uuid.uuid4(), "claim_expired",
-                    {"actor_id": claim["actor_id"], "expired_at": now.isoformat()},
-                    actor_id=claim["actor_id"] or "system",
-                )
+                if (
+                    wi.get("claimed_by") == claim["actor_id"]
+                    and wi.get("claim_expires_at") == claim["expires_at"]
+                ):
+                    wi["claimed_by"] = None
+                    wi["claim_expires_at"] = None
+                    self._append_claim_event(
+                        wi, uuid.uuid4(), "claim_expired",
+                        {"actor_id": claim["actor_id"], "expired_at": now.isoformat()},
+                        actor_id=claim["actor_id"] or "system",
+                    )
         return len(expired)
 
     def create_link(
@@ -885,9 +914,12 @@ class InMemorySubstrate:
         event_id: uuid.UUID | None = None,
         payload: dict | None = None,
     ) -> Link:
-        _validate_actor_kind(actor_kind)
         if event_id is None:
             event_id = uuid.uuid4()
+        validate_mutation_params(
+            actor_kind=actor_kind,
+            event_id=event_id,
+        )
 
         from_wi = self._work_items.get(from_work_item_id)
         to_wi = self._work_items.get(to_work_item_id)
@@ -954,9 +986,12 @@ class InMemorySubstrate:
         *,
         event_id: uuid.UUID | None = None,
     ) -> None:
-        _validate_actor_kind(actor_kind)
         if event_id is None:
             event_id = uuid.uuid4()
+        validate_mutation_params(
+            actor_kind=actor_kind,
+            event_id=event_id,
+        )
 
         from_wi = self._work_items.get(from_work_item_id)
         to_wi = self._work_items.get(to_work_item_id)
@@ -974,20 +1009,22 @@ class InMemorySubstrate:
             for ln in self._links
         )
         if not has_live:
-            events = self._events.get(from_work_item_id, [])
-            has_created = any(
-                e.transition == "link_created"
-                and (e.payload or {}).get("to_work_item_id") == str(to_work_item_id)
-                and (e.payload or {}).get("link_type") == link_type
-                for e in events
+            events = sorted(
+                self._events.get(from_work_item_id, []),
+                key=lambda e: e.event_seq,
+                reverse=True,
             )
-            has_removed = any(
-                e.transition == "link_removed"
-                and (e.payload or {}).get("to_work_item_id") == str(to_work_item_id)
-                and (e.payload or {}).get("link_type") == link_type
-                for e in events
-            )
-            if not has_created or has_removed:
+            most_recent = None
+            for e in events:
+                if e.transition in ("link_created", "link_removed"):
+                    p = e.payload or {}
+                    if (
+                        p.get("to_work_item_id") == str(to_work_item_id)
+                        and p.get("link_type") == link_type
+                    ):
+                        most_recent = e.transition
+                        break
+            if most_recent != "link_created":
                 raise SubstrateError(
                     ErrorCode.LINK_NOT_FOUND,
                     f"No live link of type {link_type!r} "
@@ -1150,7 +1187,7 @@ class InMemorySubstrate:
             "transition": payload.get("transition"),
             "payload": payload.get("event_payload"),
             "retry_count": 0,
-            "max_retries": 3,
+            "max_retries": entry.get("max_retries", 3),
             "status": "pending",
             "updated_at": datetime.now(UTC),
         })
@@ -1185,9 +1222,13 @@ class InMemorySubstrate:
         *,
         event_id: uuid.UUID | None = None,
     ) -> Event:
-        _validate_actor_kind(actor_kind)
         if event_id is None:
             event_id = uuid.uuid4()
+        validate_mutation_params(
+            actor_kind=actor_kind,
+            event_id=event_id,
+            not_before=not_before,
+        )
 
         wi = self._work_items.get(work_item_id)
         validate_work_item_exists(wi, work_item_id)
@@ -1342,6 +1383,14 @@ class InMemorySubstrate:
         self, wi: dict, event_id: uuid.UUID, transition: str, payload: dict,
         *, actor_id: str = "system", actor_kind: str = "system",
     ) -> None:
+        existing = check_idempotency(
+            self._event_id_index.get(event_id),
+            actor_id,
+            transition,
+            wi["work_item_id"],
+        )
+        if existing is not None:
+            return
         now = datetime.now(UTC)
         evt = _make_event(
             event_id=event_id,
@@ -1368,6 +1417,14 @@ class InMemorySubstrate:
         actor_id: str, actor_kind: str, actor_metadata: Jsonb | None,
         transition: str, payload: Jsonb | None,
     ) -> None:
+        existing = check_idempotency(
+            self._event_id_index.get(event_id),
+            actor_id,
+            transition,
+            wi["work_item_id"],
+        )
+        if existing is not None:
+            return
         now = datetime.now(UTC)
         evt = _make_event(
             event_id=event_id,

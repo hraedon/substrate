@@ -14,6 +14,20 @@ from ._types import ReplayReport
 log = structlog.get_logger()
 
 
+def drop_old_replay_tables(conn: psycopg.Connection, schema: str) -> None:
+    """Drop stale replay tables from previous runs."""
+    old_tables = conn.execute(
+        SQL(
+            "SELECT tablename FROM pg_tables WHERE schemaname = %s "
+            "AND (tablename LIKE 'work_items_current_replay_%%' "
+            "OR tablename LIKE 'replay_report_%%')"
+        ),
+        [schema],
+    ).fetchall()
+    for tbl in old_tables:
+        conn.execute(SQL("DROP TABLE IF EXISTS {}").format(Identifier(tbl["tablename"])))
+
+
 class _ReplayHaltError(SubstrateError):
     def __init__(self, message: str) -> None:
         super().__init__(ErrorCode.REPLAY_HALTED, message)
@@ -37,17 +51,6 @@ def replay(
     tag = _uuid.uuid4().hex[:8]
     replay_table = f"work_items_current_replay_{tag}"
     report_table = f"replay_report_{tag}"
-
-    old_tables = conn.execute(
-        SQL(
-            "SELECT tablename FROM pg_tables WHERE schemaname = %s "
-            "AND (tablename LIKE 'work_items_current_replay_%%' "
-            "OR tablename LIKE 'replay_report_%%')"
-        ),
-        [schema],
-    ).fetchall()
-    for tbl in old_tables:
-        conn.execute(SQL("DROP TABLE IF EXISTS {}").format(Identifier(tbl["tablename"])))
 
     conn.execute(
         SQL(
@@ -175,7 +178,7 @@ def replay(
                 None,
                 replayed_state["last_event_seq"] + 1,
                 replayed_state["claimed_by"],
-                None,
+                replayed_state["claim_expires_at"],
                 replayed_state["attempt_number"],
             ],
         )
@@ -211,6 +214,7 @@ def _replay_work_item(
     last_seq = 0
     attempt_number = 0
     claimed_by: str | None = None
+    claim_expires_at: datetime | None = None
     warnings = 0
 
     for evt in events:
@@ -281,11 +285,18 @@ def _replay_work_item(
             if transition == "claim_acquired":
                 payload = evt["payload"] or {}
                 claimed_by = payload.get("actor_id")
+                expires_str = payload.get("expires_at")
+                if expires_str:
+                    claim_expires_at = datetime.fromisoformat(expires_str)
             elif transition == "claim_stolen":
                 payload = evt["payload"] or {}
                 claimed_by = payload.get("new_actor_id")
+                expires_str = payload.get("expires_at")
+                if expires_str:
+                    claim_expires_at = datetime.fromisoformat(expires_str)
             elif transition in ("claim_released", "claim_expired"):
                 claimed_by = None
+                claim_expires_at = None
         elif transition == "escalated":
             needs_review = True
         elif transition == "not_before_set":
@@ -325,6 +336,7 @@ def _replay_work_item(
                 if payload.get("custom_fields_update"):
                     custom_fields = {**custom_fields, **payload["custom_fields_update"]}
                 claimed_by = None
+                claim_expires_at = None
 
     return {
         "current_state": state,
@@ -334,6 +346,7 @@ def _replay_work_item(
         "last_event_seq": last_seq,
         "attempt_number": attempt_number,
         "claimed_by": claimed_by,
+        "claim_expires_at": claim_expires_at,
     }, warnings
 
 
