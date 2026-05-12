@@ -15,6 +15,7 @@ import psycopg
 import structlog
 from psycopg.sql import SQL, Identifier, Literal
 
+from ._contract import Jsonb
 from ._errors import ErrorCode, SubstrateError
 from ._events import append_event
 from ._keys import KeySet
@@ -270,11 +271,11 @@ def _move_to_dead_letter(
             workflow_name=evt_row["workflow_name"],
             workflow_version=evt_row["workflow_version"],
             transition="hook_dead_lettered",
-            payload={
+            payload=Jsonb({
                 "hook_name": hook_row["hook_name"],
                 "hook_queue_id": hook_row["id"],
                 "error_message": error_message,
-            },
+            }),
             event_id=uuid.uuid4(),
         )
 

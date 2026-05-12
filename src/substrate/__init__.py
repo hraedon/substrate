@@ -10,6 +10,9 @@ import structlog
 
 from ._connection import ConnectionManager
 from ._contract import (
+    Jsonb as _Jsonb,
+)
+from ._contract import (
     check_append_blocked as _check_append_blocked,
 )
 from ._contract import (
@@ -428,7 +431,7 @@ class Substrate:
                     work_item_type=work_item_type,
                     actor_id=actor_id,
                     actor_kind=actor_kind,
-                    actor_metadata=actor_metadata,
+                    actor_metadata=_Jsonb(actor_metadata) if actor_metadata is not None else None,
                     key_set=self._keys,
                     custom_fields=custom_fields,
                     not_before=not_before,
@@ -518,12 +521,12 @@ class Substrate:
                     work_item_id=work_item_id,
                     actor_id=actor_id,
                     actor_kind=actor_kind,
-                    actor_metadata=actor_metadata,
+                    actor_metadata=_Jsonb(actor_metadata) if actor_metadata is not None else None,
                     key_set=self._keys,
                     workflow_name=wi_row["workflow_name"],
                     workflow_version=wi_row["workflow_version"],
                     transition=transition,
-                    payload=payload,
+                    payload=_Jsonb(payload) if payload is not None else None,
                     event_id=event_id,
                     expected_event_seq=expected_event_seq,
                 )
@@ -678,11 +681,11 @@ class Substrate:
                     work_item_id=work_item_id,
                     actor_id=actor_id,
                     actor_kind=actor_kind,
-                    actor_metadata=actor_metadata,
+                    actor_metadata=_Jsonb(actor_metadata) if actor_metadata is not None else None,
                     key_set=self._keys,
                     transition_name=transition_name,
                     new_state=new_state,
-                    payload=payload,
+                    payload=_Jsonb(payload) if payload is not None else None,
                     event_id=event_id,
                     expected_event_seq=expected_event_seq,
                     custom_fields_update=custom_fields,
@@ -1049,10 +1052,10 @@ class Substrate:
                     link_type=link_type,
                     actor_id=actor_id,
                     actor_kind=actor_kind,
-                    actor_metadata=actor_metadata,
+                    actor_metadata=_Jsonb(actor_metadata) if actor_metadata is not None else None,
                     key_set=self._keys,
                     event_id=event_id,
-                    payload=payload,
+                    payload=_Jsonb(payload) if payload is not None else None,
                 )
 
             self._metrics.inc("links_created", self._project)
@@ -1102,7 +1105,7 @@ class Substrate:
                     link_type=link_type,
                     actor_id=actor_id,
                     actor_kind=actor_kind,
-                    actor_metadata=actor_metadata,
+                    actor_metadata=_Jsonb(actor_metadata) if actor_metadata is not None else None,
                     key_set=self._keys,
                     event_id=event_id,
                 )
@@ -1270,12 +1273,12 @@ class Substrate:
                     work_item_id=work_item_id,
                     actor_id=actor_id,
                     actor_kind=actor_kind,
-                    actor_metadata=actor_metadata,
+                    actor_metadata=_Jsonb(actor_metadata) if actor_metadata is not None else None,
                     key_set=self._keys,
                     workflow_name=wi["workflow_name"],
                     workflow_version=wi["workflow_version"],
                     transition="not_before_set",
-                    payload={"not_before": not_before.isoformat() if not_before else None},
+                    payload=_Jsonb({"not_before": not_before.isoformat() if not_before else None}),
                     event_id=event_id,
                     _prelocked_wi=wi,
                 )

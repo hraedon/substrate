@@ -37,6 +37,7 @@ _(none)_
 
 | # | Title | Severity | Resolution |
 |---|---|---|---|
+| 113 | Jsonb() wrapper type would replace fragile per-entry-point validation | low | Implemented — Jsonb frozen dataclass validates on construction; internal functions accept Jsonb | None; public API wraps dict | None at boundary |
 | 083 | No uniqueness checks on state/transition/type names | medium | Accepted — deduplication is deterministic; error surfaces at runtime |
 | 112 | Sync validator row-lock DoS — operational hardening | medium | Implemented — statement_timeout, AST I/O detection, near-timeout watchdog |
 | 082 | Default values not type-checked at workflow registration | medium | Accepted — late validation surfaces error at creation time |

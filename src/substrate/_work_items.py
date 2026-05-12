@@ -6,6 +6,7 @@ from datetime import datetime
 import psycopg
 from psycopg.sql import SQL
 
+from ._contract import Jsonb
 from ._errors import ErrorCode, SubstrateError
 from ._events import append_event
 from ._keys import KeySet
@@ -75,7 +76,7 @@ def create_work_item(
     work_item_type: str,
     actor_id: str,
     actor_kind: str,
-    actor_metadata: dict | None,
+    actor_metadata: Jsonb | None,
     key_set: KeySet,
     custom_fields: dict | None = None,
     not_before: datetime | None = None,
@@ -134,12 +135,12 @@ def create_work_item(
         workflow_name=workflow_name,
         workflow_version=version,
         transition="created",
-        payload={
+        payload=Jsonb({
             "work_item_type": work_item_type,
             "initial_state": initial_state,
             "custom_fields": validated_fields,
             "not_before": not_before.isoformat() if not_before else None,
-        },
+        }),
         event_id=event_id,
     )
 

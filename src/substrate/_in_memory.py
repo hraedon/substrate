@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from ._contract import (
+    Jsonb,
     check_actor_role_authorized,
     check_append_blocked,
     check_expected_seq,
@@ -16,7 +17,6 @@ from ._contract import (
     resolve_heartbeat,
     resolve_transition,
     should_escalate,
-    validate_json_safe_value,
     validate_link_type,
     validate_read_events_filters,
     validate_release,
@@ -65,14 +65,16 @@ def _make_event(
     event_seq: int,
     actor_id: str,
     actor_kind: str,
-    actor_metadata: dict | None,
+    actor_metadata: Jsonb | None,
     workflow_name: str,
     workflow_version: int,
     transition: str | None,
-    payload: dict | None,
+    payload: Jsonb | None,
     timestamp: datetime,
     key_set: KeySet | None = None,
 ) -> Event:
+    am = actor_metadata.value if actor_metadata is not None else None
+    pl = payload.value if payload is not None else None
     if key_set is not None:
         key_entry = key_set.active_key()
         signature, canonical_hash, canonical_envelope = _sign_event(
@@ -80,7 +82,7 @@ def _make_event(
             work_item_id=work_item_id,
             actor_id=actor_id,
             transition=transition,
-            payload=payload,
+            payload=pl,
             key=key_entry.secret,
         )
         return Event(
@@ -89,13 +91,13 @@ def _make_event(
             event_seq=event_seq,
             actor_id=actor_id,
             actor_kind=actor_kind,
-            actor_metadata=actor_metadata,
+            actor_metadata=am,
             key_id=key_entry.key_id,
             workflow_name=workflow_name,
             workflow_version=workflow_version,
             timestamp=timestamp,
             transition=transition,
-            payload=payload,
+            payload=pl,
             payload_canonical_hash=canonical_hash,
             signature=signature,
             canonical_envelope=canonical_envelope,
@@ -106,13 +108,13 @@ def _make_event(
         event_seq=event_seq,
         actor_id=actor_id,
         actor_kind=actor_kind,
-        actor_metadata=actor_metadata,
+        actor_metadata=am,
         key_id=_DUMMY_KEY_ID,
         workflow_name=workflow_name,
         workflow_version=workflow_version,
         timestamp=timestamp,
         transition=transition,
-        payload=payload,
+        payload=pl,
         payload_canonical_hash=_DUMMY_HASH,
         signature=_DUMMY_SIG,
         canonical_envelope=_DUMMY_SIG,
@@ -389,16 +391,16 @@ class InMemorySubstrate:
             event_seq=0,
             actor_id=actor_id,
             actor_kind=actor_kind,
-            actor_metadata=actor_metadata,
+            actor_metadata=Jsonb(actor_metadata) if actor_metadata is not None else None,
             workflow_name=workflow_name,
             workflow_version=version,
             transition="created",
-            payload={
+            payload=Jsonb({
                 "work_item_type": work_item_type,
                 "initial_state": initial_state,
                 "custom_fields": validated_fields,
                 "not_before": not_before.isoformat() if not_before else None,
-            },
+            }),
             timestamp=now,
             key_set=self._key_set,
         )
@@ -420,10 +422,6 @@ class InMemorySubstrate:
         expected_event_seq: int | None = None,
     ) -> Event:
         _validate_actor_kind(actor_kind)
-        if actor_metadata is not None:
-            validate_json_safe_value(actor_metadata, "actor_metadata")
-        if payload is not None:
-            validate_json_safe_value(payload, "payload")
         if event_id is None:
             event_id = uuid.uuid4()
 
@@ -458,11 +456,11 @@ class InMemorySubstrate:
             event_seq=wi["next_event_seq"],
             actor_id=actor_id,
             actor_kind=actor_kind,
-            actor_metadata=actor_metadata,
+            actor_metadata=Jsonb(actor_metadata) if actor_metadata is not None else None,
             workflow_name=wi["workflow_name"],
             workflow_version=wi["workflow_version"],
             transition=transition,
-            payload=payload,
+            payload=Jsonb(payload) if payload is not None else None,
             timestamp=now,
             key_set=self._key_set,
         )
@@ -489,10 +487,6 @@ class InMemorySubstrate:
         expected_event_seq: int | None = None,
     ) -> Event:
         _validate_actor_kind(actor_kind)
-        if actor_metadata is not None:
-            validate_json_safe_value(actor_metadata, "actor_metadata")
-        if payload is not None:
-            validate_json_safe_value(payload, "payload")
         if event_id is None:
             event_id = uuid.uuid4()
 
@@ -529,6 +523,8 @@ class InMemorySubstrate:
             self._validate_refs_in_memory(wf_data, wi["work_item_type"], custom_fields)
 
         new_state = transition_def["to_state"]
+
+        am_jsonb = Jsonb(actor_metadata) if actor_metadata is not None else None
 
         validator_name = transition_def.get("validator")
         if validator_name:
@@ -575,11 +571,11 @@ class InMemorySubstrate:
             event_seq=wi["next_event_seq"],
             actor_id=actor_id,
             actor_kind=actor_kind,
-            actor_metadata=actor_metadata,
+            actor_metadata=am_jsonb,
             workflow_name=wi["workflow_name"],
             workflow_version=wi["workflow_version"],
             transition=transition_name,
-            payload=stored_payload,
+            payload=Jsonb(stored_payload),
             timestamp=now,
             key_set=self._key_set,
         )
@@ -926,8 +922,9 @@ class InMemorySubstrate:
             link_payload["link_payload"] = payload
 
         self._append_simple_event(
-            from_wi, event_id, actor_id, actor_kind, actor_metadata,
-            "link_created", link_payload,
+            from_wi, event_id, actor_id, actor_kind,
+            Jsonb(actor_metadata) if actor_metadata is not None else None,
+            "link_created", Jsonb(link_payload),
         )
 
         self._links.append({
@@ -998,13 +995,14 @@ class InMemorySubstrate:
                 )
 
         self._append_simple_event(
-            from_wi, event_id, actor_id, actor_kind, actor_metadata,
+            from_wi, event_id, actor_id, actor_kind,
+            Jsonb(actor_metadata) if actor_metadata is not None else None,
             "link_removed",
-            {
+            Jsonb({
                 "from_work_item_id": str(from_work_item_id),
                 "to_work_item_id": str(to_work_item_id),
                 "link_type": link_type,
-            },
+            }),
         )
 
         self._links = [
@@ -1211,11 +1209,11 @@ class InMemorySubstrate:
             event_seq=wi["next_event_seq"],
             actor_id=actor_id,
             actor_kind=actor_kind,
-            actor_metadata=actor_metadata,
+            actor_metadata=Jsonb(actor_metadata) if actor_metadata is not None else None,
             workflow_name=wi["workflow_name"],
             workflow_version=wi["workflow_version"],
             transition="not_before_set",
-            payload={"not_before": not_before.isoformat() if not_before else None},
+            payload=Jsonb({"not_before": not_before.isoformat() if not_before else None}),
             timestamp=now,
             key_set=self._key_set,
         )
@@ -1355,7 +1353,7 @@ class InMemorySubstrate:
             workflow_name=wi["workflow_name"],
             workflow_version=wi["workflow_version"],
             transition=transition,
-            payload=payload,
+            payload=Jsonb(payload),
             timestamp=now,
             key_set=self._key_set,
         )
@@ -1367,8 +1365,8 @@ class InMemorySubstrate:
 
     def _append_simple_event(
         self, wi: dict, event_id: uuid.UUID,
-        actor_id: str, actor_kind: str, actor_metadata: dict | None,
-        transition: str, payload: dict,
+        actor_id: str, actor_kind: str, actor_metadata: Jsonb | None,
+        transition: str, payload: Jsonb | None,
     ) -> None:
         now = datetime.now(UTC)
         evt = _make_event(

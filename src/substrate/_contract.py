@@ -425,6 +425,15 @@ def validate_json_safe_value(value: object, label: str) -> None:
         )
 
 
+@dataclass(frozen=True)
+class Jsonb:
+    value: dict | None
+
+    def __post_init__(self) -> None:
+        if self.value is not None:
+            validate_json_safe_value(self.value, "value")
+
+
 def _check_string_safe(value: str, label: str) -> None:
     if "\u0000" in value:
         raise SubstrateError(

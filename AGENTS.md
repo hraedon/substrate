@@ -32,7 +32,7 @@ One Postgres database, one schema per project. The `Substrate` handle owns one l
 src/substrate/
   __init__.py       # Public API: Substrate class
   _connection.py    # Connection pool, schema-per-project
-  _contract.py      # Single-source-of-truth business logic (RFC-062)
+  _contract.py      # Single-source-of-truth business logic (RFC-062) + Jsonb wrapper type
   _migrations.py    # Migration runner
   _events.py        # Event append, idempotency, seq allocation
   _work_items.py    # Create, query (FR-05b)

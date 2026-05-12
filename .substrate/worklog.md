@@ -4,6 +4,30 @@ Structured log of development sessions and milestones.
 
 ---
 
+## 2026-05-12 — Session 23: BC-113 Jsonb wrapper type
+
+**Focus:** Implement BC-113 — replace fragile per-entry-point JSONB validation with type-enforced `Jsonb` wrapper.
+
+**Delivered:**
+
+1. **`Jsonb` frozen dataclass in `_contract.py`** — Wraps `dict | None`; validates via `validate_json_safe_value` in `__post_init__`. Construction is the validation gate.
+
+2. **Internal function signatures changed to `Jsonb | None`** — `_events.py::append_event()` and `append_transition_event()`, `_work_items.py::create_work_item()`, `_links.py::create_link()` and `remove_link()`, `_in_memory.py::_make_event()`, `_append_simple_event()`, `_append_claim_event()` all accept `Jsonb | None` for `actor_metadata` and `payload`.
+
+3. **Public API unchanged** — `__init__.py` and `_in_memory.py` public methods still accept `dict | None`; auto-wrap to `Jsonb | None` at the boundary. No breaking change for callers.
+
+4. **All internal `append_event` callers updated** — `_claims.py` (4 call sites), `_hooks.py` (1 call site), `_work_items.py` (1 call site), `_links.py` (2 call sites), `__init__.py::update_not_before()` (1 call site) wrap internally-constructed payloads in `Jsonb(...)`.
+
+5. **Removed per-entry-point `_vjs` calls** — `_events.py` and `_in_memory.py` no longer call `validate_json_safe_value` directly; validation is guaranteed by `Jsonb` construction.
+
+6. **Closed InMemory validation gaps** — `_in_memory.py::create_work_item()`, `create_link()`, `remove_link()`, `update_not_before()` now validate `actor_metadata` via `Jsonb` wrapping, closing previously-unprotected paths.
+
+**Breadcrumbs resolved:** BC-113.
+
+**Test results:** 410 passed, lint clean.
+
+---
+
 ## 2026-05-11 — Session 22: Minimax breadcrumb triage + codebase audit
 
 **Focus:** Resolve all Minimax breadcrumbs, audit for additional issues, update spec.

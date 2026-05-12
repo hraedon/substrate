@@ -6,6 +6,7 @@ from datetime import datetime
 import psycopg
 from psycopg.sql import SQL
 
+from ._contract import Jsonb
 from ._errors import ErrorCode, SubstrateError
 from ._keys import KeySet
 from ._signing import sign_event
@@ -89,12 +90,12 @@ def append_event(
     work_item_id: uuid.UUID,
     actor_id: str,
     actor_kind: str,
-    actor_metadata: dict | None,
+    actor_metadata: Jsonb | None,
     key_set: KeySet,
     workflow_name: str,
     workflow_version: int,
     transition: str | None,
-    payload: dict | None,
+    payload: Jsonb | None,
     event_id: uuid.UUID,
     expected_event_seq: int | None = None,
     _prelocked_wi: dict | None = None,
@@ -119,19 +120,15 @@ def append_event(
     next_seq = wi_row["next_event_seq"]
     check_expected_seq(next_seq, expected_event_seq)
 
-    from ._contract import validate_json_safe_value as _vjs
-
-    if actor_metadata is not None:
-        _vjs(actor_metadata, "actor_metadata")
-    if payload is not None:
-        _vjs(payload, "payload")
+    am = actor_metadata.value if actor_metadata is not None else None
+    pl = payload.value if payload is not None else None
 
     signature, canonical_hash, canonical_envelope = sign_event(
         event_id=event_id,
         work_item_id=work_item_id,
         actor_id=actor_id,
         transition=transition,
-        payload=payload,
+        payload=pl,
         key=key_entry.secret,
     )
 
@@ -150,12 +147,12 @@ def append_event(
             event_seq,
             actor_id,
             actor_kind,
-            psycopg.types.json.Jsonb(actor_metadata) if actor_metadata is not None else None,
+            psycopg.types.json.Jsonb(am) if am is not None else None,
             key_id,
             workflow_name,
             workflow_version,
             transition,
-            psycopg.types.json.Jsonb(payload) if payload is not None else None,
+            psycopg.types.json.Jsonb(pl) if pl is not None else None,
             canonical_hash,
             signature,
             canonical_envelope,
@@ -177,13 +174,13 @@ def append_event(
         event_seq=event_seq,
         actor_id=actor_id,
         actor_kind=actor_kind,
-        actor_metadata=actor_metadata,
+        actor_metadata=am,
         key_id=key_id,
         workflow_name=workflow_name,
         workflow_version=workflow_version,
         timestamp=row["timestamp"],
         transition=transition,
-        payload=payload,
+        payload=pl,
         payload_canonical_hash=canonical_hash,
         signature=signature,
         canonical_envelope=canonical_envelope,
@@ -195,11 +192,11 @@ def append_transition_event(
     work_item_id: uuid.UUID,
     actor_id: str,
     actor_kind: str,
-    actor_metadata: dict | None,
+    actor_metadata: Jsonb | None,
     key_set: KeySet,
     transition_name: str,
     new_state: str,
-    payload: dict | None,
+    payload: Jsonb | None,
     event_id: uuid.UUID,
     expected_event_seq: int | None = None,
     custom_fields_update: dict | None = None,
@@ -226,16 +223,13 @@ def append_transition_event(
     next_seq = wi_row["next_event_seq"]
     check_expected_seq(next_seq, expected_event_seq)
 
-    from ._contract import validate_json_safe_value as _vjs
+    am = actor_metadata.value if actor_metadata is not None else None
 
-    if actor_metadata is not None:
-        _vjs(actor_metadata, "actor_metadata")
-
-    stored_payload = dict(payload) if payload else {}
+    stored_payload = dict(payload.value) if payload is not None else {}
     if custom_fields_update:
         stored_payload["custom_fields_update"] = custom_fields_update
 
-    _vjs(stored_payload, "payload")
+    Jsonb(stored_payload)
 
     signature, canonical_hash, canonical_envelope = sign_event(
         event_id=event_id,
@@ -264,7 +258,7 @@ def append_transition_event(
             event_seq,
             actor_id,
             actor_kind,
-            psycopg.types.json.Jsonb(actor_metadata) if actor_metadata is not None else None,
+            psycopg.types.json.Jsonb(am) if am is not None else None,
             key_id,
             workflow_name,
             workflow_version,
@@ -313,7 +307,7 @@ def append_transition_event(
         event_seq=event_seq,
         actor_id=actor_id,
         actor_kind=actor_kind,
-        actor_metadata=actor_metadata,
+        actor_metadata=am,
         key_id=key_id,
         workflow_name=workflow_name,
         workflow_version=workflow_version,

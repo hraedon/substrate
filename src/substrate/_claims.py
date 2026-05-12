@@ -7,6 +7,7 @@ import psycopg
 from psycopg.sql import SQL
 
 from ._contract import (
+    Jsonb,
     resolve_claim_acquire,
     resolve_heartbeat,
     should_escalate,
@@ -116,7 +117,7 @@ def acquire_claim(
             workflow_name=wi["workflow_name"],
             workflow_version=wi["workflow_version"],
             transition=result.event_transition,
-            payload=result.event_payload,
+            payload=Jsonb(result.event_payload),
             event_id=eid,
             _prelocked_wi=wi,
         )
@@ -176,7 +177,7 @@ def _check_escalation(
         workflow_name=wi["workflow_name"],
         workflow_version=wi["workflow_version"],
         transition="escalated",
-        payload={"attempt_number": attempt_number, "threshold": threshold},
+        payload=Jsonb({"attempt_number": attempt_number, "threshold": threshold}),
         event_id=uuid.uuid4(),
     )
 
@@ -269,7 +270,7 @@ def release_claim(
             workflow_name=wi["workflow_name"],
             workflow_version=wi["workflow_version"],
             transition="claim_released",
-            payload={"actor_id": actor_id},
+            payload=Jsonb({"actor_id": actor_id}),
             event_id=event_id or uuid.uuid4(),
             _prelocked_wi=wi,
         )
@@ -309,10 +310,10 @@ def sweep_expired_claims(conn: psycopg.Connection, key_set: KeySet) -> int:
                 workflow_name=wi["workflow_name"],
                 workflow_version=wi["workflow_version"],
                 transition="claim_expired",
-                payload={
+                payload=Jsonb({
                     "actor_id": prior_actor_id,
                     "expired_at": now.isoformat(),
-                },
+                }),
                 event_id=uuid.uuid4(),
                 _prelocked_wi=wi,
             )

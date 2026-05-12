@@ -5,6 +5,7 @@ import uuid
 import psycopg
 from psycopg.sql import SQL
 
+from ._contract import Jsonb
 from ._contract import validate_link_type as _validate_link_type_contract
 from ._errors import ErrorCode, SubstrateError
 from ._events import append_event
@@ -48,10 +49,10 @@ def create_link(
     link_type: str,
     actor_id: str,
     actor_kind: str,
-    actor_metadata: dict | None,
+    actor_metadata: Jsonb | None,
     key_set: KeySet,
     event_id: uuid.UUID | None = None,
-    payload: dict | None = None,
+    payload: Jsonb | None = None,
 ) -> Link:
     if event_id is None:
         event_id = uuid.uuid4()
@@ -103,13 +104,13 @@ def create_link(
         workflow_name=from_row["workflow_name"],
         workflow_version=from_row["workflow_version"],
         transition="link_created",
-        payload={
+        payload=Jsonb({
             "link_id": str(link_id),
             "from_work_item_id": str(from_work_item_id),
             "to_work_item_id": str(to_work_item_id),
             "link_type": link_type,
-            **({"link_payload": payload} if payload else {}),
-        },
+            **({"link_payload": payload.value} if payload is not None else {}),
+        }),
         event_id=event_id,
     )
 
@@ -118,7 +119,7 @@ def create_link(
         from_work_item_id=from_work_item_id,
         to_work_item_id=to_work_item_id,
         link_type=link_type,
-        payload=payload,
+        payload=payload.value if payload is not None else None,
     )
 
 
@@ -129,7 +130,7 @@ def remove_link(
     link_type: str,
     actor_id: str,
     actor_kind: str,
-    actor_metadata: dict | None,
+    actor_metadata: Jsonb | None,
     key_set: KeySet,
     event_id: uuid.UUID | None = None,
 ) -> None:
@@ -190,10 +191,10 @@ def remove_link(
         workflow_name=from_row["workflow_name"],
         workflow_version=from_row["workflow_version"],
         transition="link_removed",
-        payload={
+        payload=Jsonb({
             "from_work_item_id": str(from_work_item_id),
             "to_work_item_id": str(to_work_item_id),
             "link_type": link_type,
-        },
+        }),
         event_id=event_id,
     )
