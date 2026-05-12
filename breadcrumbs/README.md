@@ -33,9 +33,7 @@ _(none)_
 
 | # | Title | Severity |
 |---|---|---|
-| 130 | Replay does not derive claim_expires_at, latent drift risk | medium |
-| 129 | InMemory _append_claim_event and _append_simple_event bypass idempotency | critical |
-| 128 | InMemory sweep_expired_claims unconditionally clears claimed_by without steal detection | high |
+| 128 | Extract shared EventStore protocol to prevent backend divergence | high |
 
 ## Resolved
 

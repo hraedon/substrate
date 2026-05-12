@@ -4,6 +4,37 @@ Structured log of development sessions and milestones.
 
 ---
 
+## 2026-05-12 — Session 24: Resolve adversarial review BC-114–127, implement GLM structural proposals
+
+**Focus:** Fix all 14 issues from Kimi's adversarial review (4 critical, 6 high, 4 medium), implement GLM's shared-validation and hardened-conformance-test proposals, file BC-128 for EventStore extraction.
+
+**Delivered:**
+
+1. **BC-114 — Sweep spurious claim_expired events** — Postgres checks `cur.rowcount > 0` before emitting; InMemory checks `claimed_by` consistency.
+2. **BC-115 — InMemory event_seq off-by-one** — `create_work_item` now emits `event_seq=1` matching Postgres.
+3. **BC-116/GLM-1 — InMemory idempotency bypass** — Moved check into `_append_claim_event` and `_append_simple_event` helpers.
+4. **BC-117 — InMemory remove_link fallback** — Scans most recent event by `event_seq` DESC.
+5. **BC-118 — unbounded not_before** — `validate_not_before_delta` at `create_work_item` boundary.
+6. **BC-119 — TypeError on non-string dict keys** — Guard in `_check_string_safe`.
+7. **BC-120 — HookConsumer silent death** — Retry loop for initial connect.
+8. **BC-121 — close() on partial init** — `_hook_consumer = None` guard.
+9. **BC-122 — InMemory read_events bare call** — Returns all events DESC, matching Postgres.
+10. **BC-123/GLM-4 — Duplicate workflow names** — `_require_unique` raises `WORKFLOW_SEMANTIC_ERROR`.
+11. **BC-124 — InMemory dict mutation** — Copy-on-write for validators/hooks.
+12. **BC-125 — InMemory missing validation** — Added event_id, not_before, ttl checks.
+13. **BC-126 — Dead-letter max_retries** — Migration 008 + propagation.
+14. **BC-127 — Replay temp-table cleanup** — `drop_old_replay_tables` outside transaction.
+15. **GLM-3 — Replay claim_expires_at derivation** — Derived from claim event payloads.
+16. **GLM Proposal 2 — `validate_mutation_params`** — Shared boundary validation in `_contract.py`, wired into all 9 mutation methods on both backends.
+17. **GLM Proposal 3 — Hardened property tests** — `last_event_seq` assertion + adversarial error-code equivalence test (100 examples, 4 adversarial strategies).
+18. **BC-128 filed** — EventStore protocol for future session.
+
+**Files modified:** `src/substrate/_contract.py`, `__init__.py`, `_in_memory.py`, `_claims.py`, `_replay.py`, `_hooks.py`, `_workflow.py`, `migrations/008_dead_letter_max_retries.sql`, `tests/test_property_conformance.py`, `breadcrumbs/README.md`.
+
+**Test results:** 411 passed, lint clean.
+
+---
+
 ## 2026-05-12 — Session 23: BC-113 Jsonb wrapper type
 
 **Focus:** Implement BC-113 — replace fragile per-entry-point JSONB validation with type-enforced `Jsonb` wrapper.
