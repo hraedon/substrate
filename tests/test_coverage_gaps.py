@@ -382,6 +382,98 @@ class TestQueryWorkItemsFilters:
         assert all(wi.work_item_type == "feature" for wi in page.items)
 
 
+class TestCustomFieldFilterQuery:
+    def test_single_key_match(self, substrate):
+        substrate.create_work_item(
+            workflow_name="test_workflow",
+            work_item_type="feature",
+            actor_id="agent-1",
+            custom_fields={"title": "alpha"},
+        )
+        substrate.create_work_item(
+            workflow_name="test_workflow",
+            work_item_type="feature",
+            actor_id="agent-1",
+            custom_fields={"title": "beta"},
+        )
+
+        page = substrate.query_work_items(
+            workflow_name="test_workflow",
+            custom_field_filters={"title": "alpha"},
+        )
+        assert len(page.items) >= 1
+        assert all(wi.custom_fields.get("title") == "alpha" for wi in page.items)
+
+    def test_multi_key_and(self, substrate):
+        substrate.create_work_item(
+            workflow_name="test_workflow",
+            work_item_type="feature",
+            actor_id="agent-1",
+            custom_fields={"title": "gamma", "priority": "high"},
+        )
+        substrate.create_work_item(
+            workflow_name="test_workflow",
+            work_item_type="feature",
+            actor_id="agent-1",
+            custom_fields={"title": "gamma", "priority": "low"},
+        )
+
+        page = substrate.query_work_items(
+            workflow_name="test_workflow",
+            custom_field_filters={"title": "gamma", "priority": "high"},
+        )
+        assert len(page.items) == 1
+        assert page.items[0].custom_fields["title"] == "gamma"
+        assert page.items[0].custom_fields["priority"] == "high"
+
+    def test_unknown_key_empty_result(self, substrate):
+        substrate.create_work_item(
+            workflow_name="test_workflow",
+            work_item_type="feature",
+            actor_id="agent-1",
+            custom_fields={"title": "delta"},
+        )
+
+        page = substrate.query_work_items(
+            workflow_name="test_workflow",
+            custom_field_filters={"nonexistent_field": "value"},
+        )
+        assert len(page.items) == 0
+
+    def test_cursor_pagination_with_filter(self, substrate):
+        for i in range(5):
+            substrate.create_work_item(
+                workflow_name="test_workflow",
+                work_item_type="feature",
+                actor_id="agent-1",
+                custom_fields={"title": "paged", "priority": "high"},
+            )
+        substrate.create_work_item(
+            workflow_name="test_workflow",
+            work_item_type="feature",
+            actor_id="agent-1",
+            custom_fields={"title": "other"},
+        )
+
+        seen_ids = set()
+        cursor = None
+        while True:
+            page = substrate.query_work_items(
+                workflow_name="test_workflow",
+                custom_field_filters={"title": "paged"},
+                cursor=cursor,
+                page_size=2,
+            )
+            for wi in page.items:
+                assert wi.custom_fields["title"] == "paged"
+                assert wi.work_item_id not in seen_ids
+                seen_ids.add(wi.work_item_id)
+            if not page.has_more:
+                break
+            cursor = page.cursor
+        assert len(seen_ids) == 5
+
+
 class TestHmacKeyPathRequired:
     def test_substrate_init_rejects_none_key_path(self):
         with pytest.raises(SubstrateError) as exc_info:

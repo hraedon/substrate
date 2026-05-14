@@ -31,15 +31,15 @@ _(none)_
 
 ## Open
 
-| # | Title | Severity |
-|---|---|---|
-| 128 | Extract shared EventStore protocol to prevent backend divergence | high |
+_(none)_
 
 ## Resolved
 
 | # | Title | Severity | Resolution |
 |---|---|---|---|
-| 138 | InMemory create_link drops empty dict payload via truthiness check | low | Changed `if payload:` to `if payload is not None:` |
+| 141 | `_dict_contains` diverges from Postgres `@>` on nested JSON custom fields | medium | Replaced `_dict_contains` with recursive containment matching Postgres `@>` semantics: deep dict containment, list subset, scalar equality. 3 new conformance tests for nested JSON fields. |
+| 140 | Property test `reuse_eid` strategy never fires — idempotency coverage is dead | medium | Replaced `st.lists(operation())` with `st.data()` iterative draw threading `event_id_pool` between draws. Event IDs generated at draw time so both backends use the same value. Fixed InMemory projection-before-event bugs in `acquire_claim`, `release_claim`, `create_work_item`. |
+| 128 | Extract shared EventStore protocol to prevent backend divergence | high | `_event_store.py` with `EventStore` protocol, `InMemoryEventStore`, `PostgresEventStore`, shared `append_event()`. InMemory fully migrated; Postgres migrated for `append_event`. All 411 tests pass. |
 | 137 | InMemory hook_queue entry IDs can collide after poll_hooks cleanup | medium | Replaced with monotonically increasing counter |
 | 136 | InMemory read_events sort order diverges from Postgres for time-range queries | medium | Fixed ascending sort for time-range queries, added event_seq tiebreaker |
 | 135 | validate_not_before raises TypeError on naive/aware datetime mismatch | medium | Added timezone normalization matching validate_not_before_delta |

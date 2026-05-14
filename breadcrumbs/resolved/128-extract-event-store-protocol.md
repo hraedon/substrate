@@ -2,7 +2,7 @@
 number: "128"
 title: Extract shared EventStore protocol to prevent backend divergence
 severity: high
-status: proposed
+status: implemented
 kind: design
 author: adversarial-review
 ---

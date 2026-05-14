@@ -31,6 +31,11 @@ ACTOR_ROLE_MAP = {"agent-1": "agent", "agent-2": "agent", "reviewer-1": "reviewe
 
 @st.composite
 def operation(draw, seen_event_ids=None):
+    reuse_id = draw(st.booleans())
+    if reuse_id and seen_event_ids and len(seen_event_ids) > 0:
+        prior_eid = draw(st.sampled_from(seen_event_ids))
+    else:
+        prior_eid = None
     kind = draw(
         st.sampled_from(
             [
@@ -50,6 +55,7 @@ def operation(draw, seen_event_ids=None):
             "work_item_type": draw(st.sampled_from(VALID_TYPES)),
             "actor_id": draw(st.sampled_from(ACTOR_IDS)),
             "title": draw(st.text(min_size=1, max_size=20)),
+            "reuse_eid": prior_eid,
         }
     if kind == "claim":
         return {
@@ -57,18 +63,21 @@ def operation(draw, seen_event_ids=None):
             "idx": draw(st.integers(min_value=0, max_value=5)),
             "actor_id": draw(st.sampled_from(ACTOR_IDS)),
             "ttl": draw(st.integers(min_value=60, max_value=600)),
+            "reuse_eid": prior_eid,
         }
     if kind == "transition":
         return {
             "op": "transition",
             "idx": draw(st.integers(min_value=0, max_value=5)),
             "actor_id": draw(st.sampled_from(ACTOR_IDS)),
+            "reuse_eid": prior_eid,
         }
     if kind == "release":
         return {
             "op": "release",
             "idx": draw(st.integers(min_value=0, max_value=5)),
             "actor_id": draw(st.sampled_from(ACTOR_IDS)),
+            "reuse_eid": prior_eid,
         }
     if kind == "sweep":
         return {"op": "sweep"}
@@ -85,6 +94,77 @@ def operation(draw, seen_event_ids=None):
             "idx": draw(st.integers(min_value=0, max_value=5)),
             "actor_id": draw(st.sampled_from(ACTOR_IDS)),
             "transition": draw(st.none() | st.text(min_size=1, max_size=10)),
+            "reuse_eid": prior_eid,
+        }
+    return {"op": "sweep"}
+
+
+def _draw_operation(data, seen_event_ids):
+    reuse_id = data.draw(st.booleans())
+    if reuse_id and seen_event_ids:
+        prior_eid = data.draw(st.sampled_from(seen_event_ids))
+    else:
+        prior_eid = None
+    eid = prior_eid or uuid.uuid4()
+    kind = data.draw(
+        st.sampled_from(
+            [
+                "create",
+                "claim",
+                "transition",
+                "release",
+                "sweep",
+                "heartbeat",
+                "append_event",
+            ]
+        )
+    )
+    if kind == "create":
+        return {
+            "op": "create",
+            "work_item_type": data.draw(st.sampled_from(VALID_TYPES)),
+            "actor_id": data.draw(st.sampled_from(ACTOR_IDS)),
+            "title": data.draw(st.text(min_size=1, max_size=20)),
+            "event_id": eid,
+        }
+    if kind == "claim":
+        return {
+            "op": "claim",
+            "idx": data.draw(st.integers(min_value=0, max_value=5)),
+            "actor_id": data.draw(st.sampled_from(ACTOR_IDS)),
+            "ttl": data.draw(st.integers(min_value=60, max_value=600)),
+            "event_id": eid,
+        }
+    if kind == "transition":
+        return {
+            "op": "transition",
+            "idx": data.draw(st.integers(min_value=0, max_value=5)),
+            "actor_id": data.draw(st.sampled_from(ACTOR_IDS)),
+            "event_id": eid,
+        }
+    if kind == "release":
+        return {
+            "op": "release",
+            "idx": data.draw(st.integers(min_value=0, max_value=5)),
+            "actor_id": data.draw(st.sampled_from(ACTOR_IDS)),
+            "event_id": eid,
+        }
+    if kind == "sweep":
+        return {"op": "sweep"}
+    if kind == "heartbeat":
+        return {
+            "op": "heartbeat",
+            "idx": data.draw(st.integers(min_value=0, max_value=5)),
+            "actor_id": data.draw(st.sampled_from(ACTOR_IDS)),
+            "ttl": data.draw(st.integers(min_value=60, max_value=600)),
+        }
+    if kind == "append_event":
+        return {
+            "op": "append_event",
+            "idx": data.draw(st.integers(min_value=0, max_value=5)),
+            "actor_id": data.draw(st.sampled_from(ACTOR_IDS)),
+            "transition": data.draw(st.none() | st.text(min_size=1, max_size=10)),
+            "event_id": eid,
         }
     return {"op": "sweep"}
 
@@ -103,12 +183,14 @@ def adversarial_operation(draw):
         )
     )
     if kind == "create_bad_event_id":
+        raw = uuid.uuid4()
+        non_v4 = uuid.UUID(bytes=raw.bytes[:-1] + bytes([raw.bytes[-1] & 0x3F]))
         return {
             "op": "create",
             "work_item_type": draw(st.sampled_from(VALID_TYPES)),
             "actor_id": draw(st.sampled_from(ACTOR_IDS)),
             "title": draw(st.text(min_size=1, max_size=20)),
-            "event_id": uuid.uuid1(),
+            "event_id": non_v4,
         }
     if kind == "create_bad_actor_kind":
         return {
@@ -136,7 +218,9 @@ def adversarial_operation(draw):
     return {"op": "sweep"}
 
 
-def _exec_op(backend, op, work_items):
+def _exec_op(backend, op, work_items, event_id_pool=None):
+    if event_id_pool is None:
+        event_id_pool = []
     if op["op"] == "create":
         role = ACTOR_ROLE_MAP.get(op["actor_id"], "agent")
         actor_metadata = {"role": role}
@@ -146,6 +230,7 @@ def _exec_op(backend, op, work_items):
             custom_fields = {"severity": "minor"}
         else:
             custom_fields = {}
+        eid = op.get("event_id") or uuid.uuid4()
         try:
             wi, _evt = backend.create_work_item(
                 workflow_name="test_workflow",
@@ -153,7 +238,9 @@ def _exec_op(backend, op, work_items):
                 actor_id=op["actor_id"],
                 actor_metadata=actor_metadata,
                 custom_fields=custom_fields,
+                event_id=eid,
             )
+            event_id_pool.append(eid)
             work_items.append(wi)
             return ("ok", "created", str(wi.work_item_id))
         except SubstrateError as e:
@@ -166,10 +253,12 @@ def _exec_op(backend, op, work_items):
     wi_id = wi.work_item_id
 
     if op["op"] == "claim":
+        eid = op.get("event_id") or uuid.uuid4()
         try:
             claim = backend.acquire_claim(
-                wi_id, op["actor_id"], ttl_seconds=op["ttl"]
+                wi_id, op["actor_id"], ttl_seconds=op["ttl"], event_id=eid
             )
+            event_id_pool.append(eid)
             refreshed = backend.get_work_item(wi_id)
             if refreshed:
                 work_items[idx] = refreshed
@@ -187,8 +276,10 @@ def _exec_op(backend, op, work_items):
             return ("err", e.code)
 
     if op["op"] == "release":
+        eid = op.get("event_id") or uuid.uuid4()
         try:
-            backend.release_claim(wi_id, op["actor_id"])
+            backend.release_claim(wi_id, op["actor_id"], event_id=eid)
+            event_id_pool.append(eid)
             refreshed = backend.get_work_item(wi_id)
             if refreshed:
                 work_items[idx] = refreshed
@@ -215,13 +306,16 @@ def _exec_op(backend, op, work_items):
                 return ("noop", "terminal")
         else:
             t_name, t_role = matching[0]
+        eid = op.get("event_id") or uuid.uuid4()
         try:
             backend.transition(
                 wi_id,
                 t_name,
                 op["actor_id"],
                 actor_metadata={"role": t_role},
+                event_id=eid,
             )
+            event_id_pool.append(eid)
             refreshed = backend.get_work_item(wi_id)
             if refreshed:
                 work_items[idx] = refreshed
@@ -230,12 +324,15 @@ def _exec_op(backend, op, work_items):
             return ("err", e.code)
 
     if op["op"] == "append_event":
+        eid = op.get("event_id") or uuid.uuid4()
         try:
             backend.append_event(
                 wi_id,
                 op["actor_id"],
                 transition=op.get("transition"),
+                event_id=eid,
             )
+            event_id_pool.append(eid)
             return ("ok", "appended")
         except SubstrateError as e:
             return ("err", e.code)
@@ -264,6 +361,12 @@ def _compare_state(real_items, mem_items):
         assert r.last_event_seq == m.last_event_seq, (
             f"[{i}] last_event_seq mismatch: "
             f"real={r.last_event_seq} mem={m.last_event_seq}"
+        )
+        assert r.claimed_by == m.claimed_by, (
+            f"[{i}] claimed_by mismatch: real={r.claimed_by} mem={m.claimed_by}"
+        )
+        assert r.not_before == m.not_before, (
+            f"[{i}] not_before mismatch: real={r.not_before} mem={m.not_before}"
         )
         assert r.workflow_version == m.workflow_version
         assert r.work_item_type == m.work_item_type
@@ -327,9 +430,11 @@ class TestPropertyBasedConformance:
         deadline=None,
         suppress_health_check=[HealthCheck.too_slow],
     )
-    @given(ops=st.lists(operation(), max_size=30))
-    def test_random_sequences_equivalent(self, ops):
+    @given(data=st.data())
+    def test_random_sequences_equivalent(self, data):
         from substrate import Substrate
+
+        n_ops = data.draw(st.integers(min_value=0, max_value=30))
 
         project = f"prop_{uuid.uuid4().hex[:8]}"
         real = Substrate.create_project(DSN, project, KEY_PATH)
@@ -339,11 +444,14 @@ class TestPropertyBasedConformance:
 
         real_items = []
         mem_items = []
+        real_eids = []
+        mem_eids = []
 
         try:
-            for op in ops:
-                real_result = _exec_op(real, op, real_items)
-                mem_result = _exec_op(mem, op, mem_items)
+            for _ in range(n_ops):
+                op = _draw_operation(data, real_eids)
+                real_result = _exec_op(real, op, real_items, real_eids)
+                mem_result = _exec_op(mem, op, mem_items, mem_eids)
                 assert real_result[0] == mem_result[0], (
                     f"Op {op['op']} diverged: real={real_result} mem={mem_result}"
                 )
@@ -504,11 +612,11 @@ class TestPropertyBasedConformance:
             drop_project_schema(DSN, project)
 
     @settings(max_examples=30, deadline=None)
-    @given(
-        ops=st.lists(operation(), max_size=20),
-    )
-    def test_replay_equivalence(self, ops):
+    @given(data=st.data())
+    def test_replay_equivalence(self, data):
         from substrate import Substrate
+
+        n_ops = data.draw(st.integers(min_value=0, max_value=20))
 
         project = f"prop_replay_{uuid.uuid4().hex[:8]}"
         real = Substrate.create_project(DSN, project, KEY_PATH)
@@ -518,11 +626,14 @@ class TestPropertyBasedConformance:
 
         real_items = []
         mem_items = []
+        real_eids = []
+        mem_eids = []
 
         try:
-            for op in ops:
-                _exec_op(real, op, real_items)
-                _exec_op(mem, op, mem_items)
+            for _ in range(n_ops):
+                op = _draw_operation(data, real_eids)
+                _exec_op(real, op, real_items, real_eids)
+                _exec_op(mem, op, mem_items, mem_eids)
 
             if real_items:
                 real_report = real.replay()

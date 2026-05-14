@@ -418,3 +418,87 @@ class TestConformanceUpdateNotBefore:
         sub.update_not_before(wi.work_item_id, None, "agent-1")
         updated = sub.get_work_item(wi.work_item_id)
         assert updated.not_before is None
+
+
+class TestConformanceCustomFieldFilter:
+    def test_custom_field_filter(self, sub):
+        sub.create_work_item(
+            workflow_name="test_workflow",
+            work_item_type="feature",
+            actor_id="agent-1",
+            custom_fields={"title": "cf-query", "priority": "high"},
+        )
+        sub.create_work_item(
+            workflow_name="test_workflow",
+            work_item_type="feature",
+            actor_id="agent-1",
+            custom_fields={"title": "cf-query", "priority": "low"},
+        )
+        sub.create_work_item(
+            workflow_name="test_workflow",
+            work_item_type="feature",
+            actor_id="agent-1",
+            custom_fields={"title": "other"},
+        )
+
+        page = sub.query_work_items(
+            custom_field_filters={"title": "cf-query", "priority": "high"},
+        )
+        assert len(page.items) == 1
+        assert page.items[0].custom_fields["title"] == "cf-query"
+        assert page.items[0].custom_fields["priority"] == "high"
+
+    def test_custom_field_filter_unknown_key(self, sub):
+        sub.create_work_item(
+            workflow_name="test_workflow",
+            work_item_type="feature",
+            actor_id="agent-1",
+            custom_fields={"title": "exists"},
+        )
+        page = sub.query_work_items(
+            custom_field_filters={"no_such_key": "value"},
+        )
+        assert len(page.items) == 0
+
+    def test_custom_field_filter_nested_json_containment(self, sub):
+        sub.create_work_item(
+            workflow_name="test_workflow",
+            work_item_type="feature",
+            actor_id="agent-1",
+            custom_fields={
+                "title": "nested-test",
+                "metadata": {"env": "prod", "region": "us-east", "tags": ["a", "b"]},
+            },
+        )
+        sub.create_work_item(
+            workflow_name="test_workflow",
+            work_item_type="feature",
+            actor_id="agent-1",
+            custom_fields={
+                "title": "other-nested",
+                "metadata": {"env": "staging", "region": "eu-west"},
+            },
+        )
+        sub.create_work_item(
+            workflow_name="test_workflow",
+            work_item_type="feature",
+            actor_id="agent-1",
+            custom_fields={"title": "no-metadata"},
+        )
+
+        page = sub.query_work_items(
+            custom_field_filters={"metadata": {"env": "prod"}},
+        )
+        assert len(page.items) == 1
+        assert page.items[0].custom_fields["title"] == "nested-test"
+
+        page = sub.query_work_items(
+            custom_field_filters={"metadata": {"env": "staging", "region": "eu-west"}},
+        )
+        assert len(page.items) == 1
+        assert page.items[0].custom_fields["title"] == "other-nested"
+
+        page = sub.query_work_items(
+            custom_field_filters={"metadata": {}},
+        )
+        assert len(page.items) == 2

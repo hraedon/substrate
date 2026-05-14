@@ -605,6 +605,10 @@ Consumers (UI, audit tooling, replay validators) MUST distinguish:
 
 The federated UI and downstream consumers should surface this distinction visually (e.g., role displayed with a "claimed" qualifier until enforcement lands) rather than treating all event fields as equally authoritative.
 
+### 17.10 Heartbeat invariant
+
+Heartbeats (`heartbeat_claim`, FR-07) mutate `claim_expires_at` on `work_items_current` **without emitting an event**. This makes `claim_expires_at` the one mutable projection field that replay cannot reconstruct from the event log. Replay (`_replay.py`) intentionally excludes `claim_expires_at` from `_states_match` comparison. A NULL `claim_expires_at` with a non-NULL `claimed_by` is treated as non-expired by `resolve_heartbeat`; this is by design (the claim row in `claims` is the authoritative source for claim liveness, not the projection column). Do not "fix" replay to derive `claim_expires_at` — doing so would silently break the invariant and produce false drift reports.
+
 ---
 
 ## 18. Projection Invariants

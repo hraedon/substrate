@@ -239,6 +239,7 @@ def query_work_items(
     claimable_now: bool | None = None,
     needs_review: bool | None = None,
     has_link_type: str | None = None,
+    custom_field_filters: dict[str, object] | None = None,
     cursor: uuid.UUID | None = None,
     page_size: int = 100,
 ) -> QueryPage[WorkItem]:
@@ -275,6 +276,13 @@ def query_work_items(
         conditions.append(
             "(claimed_by IS NULL OR claim_expires_at < now()) "
             "AND (not_before IS NULL OR not_before <= now())"
+        )
+
+    if custom_field_filters:
+        import json as _json
+
+        conditions.append(
+            f"custom_fields @> {_ph(_json.dumps(custom_field_filters))}::jsonb"
         )
 
     if has_link_type is not None:

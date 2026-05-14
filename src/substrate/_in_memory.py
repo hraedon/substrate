@@ -9,8 +9,6 @@ from ._contract import (
     Jsonb,
     check_actor_role_authorized,
     check_append_blocked,
-    check_expected_seq,
-    check_idempotency,
     check_reserved_transition,
     check_role_gating,
     resolve_claim_acquire,
@@ -24,9 +22,10 @@ from ._contract import (
     validate_work_item_exists,
 )
 from ._errors import ErrorCode, SubstrateError
+from ._event_store import InMemoryEventStore
+from ._event_store import append_event as _store_append
 from ._integrity import SUBSTRATE_VERSION
 from ._keys import KeySet
-from ._signing import sign_event as _sign_event
 from ._signing import verify_event as _verify_event
 from ._types import (
     ActorRole,
@@ -51,71 +50,22 @@ from ._workflow import (
     validate_field_values,
 )
 
-_DUMMY_KEY_ID = "in-memory"
-_DUMMY_SIG = b"\x00" * 32
-_DUMMY_HASH = b"\x00" * 32
 
-
-def _make_event(
-    event_id: uuid.UUID,
-    work_item_id: uuid.UUID,
-    event_seq: int,
-    actor_id: str,
-    actor_kind: str,
-    actor_metadata: Jsonb | None,
-    workflow_name: str,
-    workflow_version: int,
-    transition: str | None,
-    payload: Jsonb | None,
-    timestamp: datetime,
-    key_set: KeySet | None = None,
-) -> Event:
-    am = actor_metadata.value if actor_metadata is not None else None
-    pl = payload.value if payload is not None else None
-    if key_set is not None:
-        key_entry = key_set.active_key()
-        signature, canonical_hash, canonical_envelope = _sign_event(
-            event_id=event_id,
-            work_item_id=work_item_id,
-            actor_id=actor_id,
-            transition=transition,
-            payload=pl,
-            key=key_entry.secret,
-        )
-        return Event(
-            event_id=event_id,
-            work_item_id=work_item_id,
-            event_seq=event_seq,
-            actor_id=actor_id,
-            actor_kind=actor_kind,
-            actor_metadata=am,
-            key_id=key_entry.key_id,
-            workflow_name=workflow_name,
-            workflow_version=workflow_version,
-            timestamp=timestamp,
-            transition=transition,
-            payload=pl,
-            payload_canonical_hash=canonical_hash,
-            signature=signature,
-            canonical_envelope=canonical_envelope,
-        )
-    return Event(
-        event_id=event_id,
-        work_item_id=work_item_id,
-        event_seq=event_seq,
-        actor_id=actor_id,
-        actor_kind=actor_kind,
-        actor_metadata=am,
-        key_id=_DUMMY_KEY_ID,
-        workflow_name=workflow_name,
-        workflow_version=workflow_version,
-        timestamp=timestamp,
-        transition=transition,
-        payload=pl,
-        payload_canonical_hash=_DUMMY_HASH,
-        signature=_DUMMY_SIG,
-        canonical_envelope=_DUMMY_SIG,
-    )
+def _dict_contains(haystack: dict, needle: dict) -> bool:
+    for k, v in needle.items():
+        if k not in haystack:
+            return False
+        h = haystack[k]
+        if isinstance(v, dict) and isinstance(h, dict):
+            if not _dict_contains(h, v):
+                return False
+        elif isinstance(v, list) and isinstance(h, list):
+            for item in v:
+                if item not in h:
+                    return False
+        elif h != v:
+            return False
+    return True
 
 
 class InMemorySubstrate:
@@ -138,8 +88,8 @@ class InMemorySubstrate:
         self._workflow_hashes: dict[tuple[str, int], bytes] = {}
         self._workflow_registered_at: dict[tuple[str, int], datetime] = {}
         self._work_items: dict[uuid.UUID, dict] = {}
-        self._events: dict[uuid.UUID, list[Event]] = {}
-        self._event_id_index: dict[uuid.UUID, Event] = {}
+        self._store = InMemoryEventStore()
+        self._store.bind(self._work_items)
         self._claims: dict[uuid.UUID, dict] = {}
         self._links: list[dict] = []
         self._actor_roles: set[tuple[str, str]] = set()
@@ -393,15 +343,15 @@ class InMemorySubstrate:
         }
         self._work_items[work_item_id] = wi_state
 
-        evt = _make_event(
-            event_id=event_id,
-            work_item_id=work_item_id,
-            event_seq=wi_state["next_event_seq"],
-            actor_id=actor_id,
-            actor_kind=actor_kind,
-            actor_metadata=Jsonb(actor_metadata) if actor_metadata is not None else None,
-            workflow_name=workflow_name,
-            workflow_version=version,
+        try:
+            evt = _store_append(
+                self._store,
+                work_item_id=work_item_id,
+                actor_id=actor_id,
+                actor_kind=actor_kind,
+                actor_metadata=Jsonb(actor_metadata) if actor_metadata is not None else None,
+                workflow_name=workflow_name,
+                workflow_version=version,
             transition="created",
             payload=Jsonb({
                 "work_item_type": work_item_type,
@@ -409,15 +359,12 @@ class InMemorySubstrate:
                 "custom_fields": validated_fields,
                 "not_before": not_before.isoformat() if not_before else None,
             }),
-            timestamp=now,
+            event_id=event_id,
             key_set=self._key_set,
         )
-        self._events.setdefault(work_item_id, []).append(evt)
-        self._event_id_index[event_id] = evt
-
-        wi_state["last_event_seq"] = wi_state["next_event_seq"]
-        wi_state["last_event_at"] = now
-        wi_state["next_event_seq"] += 1
+        except SubstrateError:
+            del self._work_items[work_item_id]
+            raise
 
         return self._wi_to_work_item(wi_state), evt
 
@@ -453,22 +400,9 @@ class InMemorySubstrate:
                     wi["workflow_name"],
                 )
 
-        existing = check_idempotency(
-            self._event_id_index.get(event_id),
-            actor_id,
-            transition,
-            work_item_id,
-        )
-        if existing is not None:
-            return existing
-
-        check_expected_seq(wi["next_event_seq"], expected_event_seq)
-
-        now = datetime.now(UTC)
-        evt = _make_event(
-            event_id=event_id,
+        return _store_append(
+            self._store,
             work_item_id=work_item_id,
-            event_seq=wi["next_event_seq"],
             actor_id=actor_id,
             actor_kind=actor_kind,
             actor_metadata=Jsonb(actor_metadata) if actor_metadata is not None else None,
@@ -476,17 +410,10 @@ class InMemorySubstrate:
             workflow_version=wi["workflow_version"],
             transition=transition,
             payload=Jsonb(payload) if payload is not None else None,
-            timestamp=now,
+            event_id=event_id,
+            expected_event_seq=expected_event_seq,
             key_set=self._key_set,
         )
-        self._events.setdefault(work_item_id, []).append(evt)
-        self._event_id_index[event_id] = evt
-
-        wi["last_event_seq"] = wi["next_event_seq"]
-        wi["last_event_at"] = now
-        wi["next_event_seq"] += 1
-
-        return evt
 
     def transition(
         self,
@@ -565,28 +492,15 @@ class InMemorySubstrate:
                 )
                 run_validator(validator_name, handler, ctx)
 
-        existing = check_idempotency(
-            self._event_id_index.get(event_id),
-            actor_id,
-            transition_name,
-            work_item_id,
-        )
-        if existing is not None:
-            return existing
-
-        check_expected_seq(wi["next_event_seq"], expected_event_seq)
-
         stored_payload = dict(payload) if payload else {}
         if custom_fields:
             stored_payload["custom_fields_update"] = custom_fields
             merged = wi.get("custom_fields") or {}
             wi["custom_fields"] = {**merged, **custom_fields}
 
-        now = datetime.now(UTC)
-        evt = _make_event(
-            event_id=event_id,
+        evt = _store_append(
+            self._store,
             work_item_id=work_item_id,
-            event_seq=wi["next_event_seq"],
             actor_id=actor_id,
             actor_kind=actor_kind,
             actor_metadata=am_jsonb,
@@ -594,16 +508,12 @@ class InMemorySubstrate:
             workflow_version=wi["workflow_version"],
             transition=transition_name,
             payload=Jsonb(stored_payload),
-            timestamp=now,
+            event_id=event_id,
+            expected_event_seq=expected_event_seq,
             key_set=self._key_set,
         )
-        self._events.setdefault(work_item_id, []).append(evt)
-        self._event_id_index[event_id] = evt
 
         wi["current_state"] = new_state
-        wi["last_event_seq"] = wi["next_event_seq"]
-        wi["last_event_at"] = now
-        wi["next_event_seq"] += 1
         wi["claimed_by"] = None
         wi["claim_expires_at"] = None
         self._claims.pop(work_item_id, None)
@@ -642,48 +552,15 @@ class InMemorySubstrate:
         before_seq: int | None = None,
     ) -> list[Event]:
         validate_read_events_filters(before_seq, work_item_id, start, end)
-
-        if work_item_id is not None:
-            evts = list(self._events.get(work_item_id, []))
-            if transition is not None:
-                evts = [e for e in evts if e.transition == transition]
-            if actor_id is not None:
-                evts = [e for e in evts if e.actor_id == actor_id]
-            if start is not None and end is not None:
-                evts = [e for e in evts if start <= e.timestamp <= end]
-            if before_seq is not None:
-                evts = [e for e in evts if e.event_seq < before_seq]
-                evts.sort(key=lambda e: e.event_seq, reverse=True)
-                return list(reversed(evts[:limit]))
-            evts.sort(key=lambda e: e.event_seq, reverse=True)
-            return list(reversed(evts[:limit]))
-        if actor_id is not None:
-            evts = [e for el in self._events.values() for e in el]
-            evts = [e for e in evts if e.actor_id == actor_id]
-            if transition is not None:
-                evts = [e for e in evts if e.transition == transition]
-            if start is not None and end is not None:
-                evts = [e for e in evts if start <= e.timestamp <= end]
-            if start is not None and end is not None:
-                evts.sort(key=lambda e: (e.timestamp, e.event_seq))
-            else:
-                evts.sort(key=lambda e: (e.timestamp, e.event_seq), reverse=True)
-            return evts[:limit]
-        if start is not None and end is not None:
-            evts = [e for el in self._events.values() for e in el]
-            evts = [e for e in evts if start <= e.timestamp <= end]
-            if transition is not None:
-                evts = [e for e in evts if e.transition == transition]
-            evts.sort(key=lambda e: (e.timestamp, e.event_seq))
-            return evts[:limit]
-        if transition is not None:
-            evts = [e for el in self._events.values() for e in el]
-            evts = [e for e in evts if e.transition == transition]
-            evts.sort(key=lambda e: (e.timestamp, e.event_seq), reverse=True)
-            return evts[:limit]
-        evts = [e for el in self._events.values() for e in el]
-        evts.sort(key=lambda e: (e.timestamp, e.event_seq), reverse=True)
-        return evts[:limit]
+        return self._store.read(
+            work_item_id=work_item_id,
+            actor_id=actor_id,
+            start=start,
+            end=end,
+            transition=transition,
+            limit=limit,
+            before_seq=before_seq,
+        )
 
     def read_events_since(
         self,
@@ -692,7 +569,7 @@ class InMemorySubstrate:
         *,
         limit: int = 100,
     ) -> list[Event]:
-        evts = self._events.get(work_item_id, [])
+        evts = self._store.events.get(work_item_id, [])
         result = [e for e in evts if e.event_seq > after_seq]
         result.sort(key=lambda e: e.event_seq)
         return result[:limit]
@@ -708,6 +585,7 @@ class InMemorySubstrate:
         claimable_now: bool | None = None,
         needs_review: bool | None = None,
         has_link_type: str | None = None,
+        custom_field_filters: dict[str, object] | None = None,
         cursor: uuid.UUID | None = None,
         page_size: int = 100,
     ) -> QueryPage[WorkItem]:
@@ -737,6 +615,11 @@ class InMemorySubstrate:
                     or (wi.get("claim_expires_at") and wi["claim_expires_at"] < now)
                 )
                 and (wi.get("not_before") is None or wi["not_before"] <= now)
+            ]
+        if custom_field_filters:
+            items = [
+                wi for wi in items
+                if _dict_contains(wi.get("custom_fields", {}), custom_field_filters)
             ]
         if has_link_type is not None:
             active = self._active_link_set(has_link_type)
@@ -799,10 +682,6 @@ class InMemorySubstrate:
             "expires_at": result.expires_at,
             "attempt_number": result.attempt_number,
         }
-        self._claims[work_item_id] = claim_data
-        wi["attempt_number"] = result.attempt_number
-        wi["claimed_by"] = actor_id
-        wi["claim_expires_at"] = result.expires_at
 
         if result.event_transition is not None:
             eid = event_id or uuid.uuid4()
@@ -812,6 +691,11 @@ class InMemorySubstrate:
                 actor_id=actor_id,
                 actor_kind=actor_kind,
             )
+
+        self._claims[work_item_id] = claim_data
+        wi["attempt_number"] = result.attempt_number
+        wi["claimed_by"] = actor_id
+        wi["claim_expires_at"] = result.expires_at
 
         self._check_escalation(wi, result.attempt_number)
 
@@ -873,17 +757,17 @@ class InMemorySubstrate:
         claim = self._claims.get(work_item_id)
         validate_release(claim, actor_id, work_item_id)
 
-        self._claims.pop(work_item_id, None)
         wi = self._work_items.get(work_item_id)
         if wi is not None:
-            wi["claimed_by"] = None
-            wi["claim_expires_at"] = None
             self._append_claim_event(
                 wi, event_id or uuid.uuid4(), "claim_released",
                 {"actor_id": actor_id},
                 actor_id=actor_id,
                 actor_kind=actor_kind,
             )
+            self._claims.pop(work_item_id, None)
+            wi["claimed_by"] = None
+            wi["claim_expires_at"] = None
 
     def sweep_expired_claims(self) -> int:
         now = datetime.now(UTC)
@@ -1016,7 +900,7 @@ class InMemorySubstrate:
         )
         if not has_live:
             events = sorted(
-                self._events.get(from_work_item_id, []),
+                self._store.events.get(from_work_item_id, []),
                 key=lambda e: e.event_seq,
                 reverse=True,
             )
@@ -1063,7 +947,7 @@ class InMemorySubstrate:
         halted = 0
         warnings = 0
         for wi_id, wi in self._work_items.items():
-            evts = self._events.get(wi_id, [])
+            evts = self._store.events.get(wi_id, [])
             if not evts:
                 continue
             try:
@@ -1260,21 +1144,10 @@ class InMemorySubstrate:
         wi = self._work_items.get(work_item_id)
         validate_work_item_exists(wi, work_item_id)
 
-        existing = check_idempotency(
-            self._event_id_index.get(event_id),
-            actor_id,
-            "not_before_set",
-            work_item_id,
-        )
-        if existing is not None:
-            return existing
-
         wi["not_before"] = not_before
-        now = datetime.now(UTC)
-        evt = _make_event(
-            event_id=event_id,
+        evt = _store_append(
+            self._store,
             work_item_id=work_item_id,
-            event_seq=wi["next_event_seq"],
             actor_id=actor_id,
             actor_kind=actor_kind,
             actor_metadata=Jsonb(actor_metadata) if actor_metadata is not None else None,
@@ -1282,14 +1155,9 @@ class InMemorySubstrate:
             workflow_version=wi["workflow_version"],
             transition="not_before_set",
             payload=Jsonb({"not_before": not_before.isoformat() if not_before else None}),
-            timestamp=now,
+            event_id=event_id,
             key_set=self._key_set,
         )
-        self._events.setdefault(work_item_id, []).append(evt)
-        self._event_id_index[event_id] = evt
-        wi["last_event_seq"] = wi["next_event_seq"]
-        wi["last_event_at"] = now
-        wi["next_event_seq"] += 1
         return evt
 
     def register_actor_role(self, actor_id: str, role: str) -> None:
@@ -1395,7 +1263,7 @@ class InMemorySubstrate:
         threshold = wf_data.get("attempt_threshold")
         has_escalated = any(
             e.transition == "escalated"
-            for e in self._events.get(wi["work_item_id"], [])
+            for e in self._store.events.get(wi["work_item_id"], [])
         )
         if not should_escalate(threshold, has_escalated, attempt_number):
             return False
@@ -1409,20 +1277,10 @@ class InMemorySubstrate:
     def _append_claim_event(
         self, wi: dict, event_id: uuid.UUID, transition: str, payload: dict,
         *, actor_id: str = "system", actor_kind: str = "system",
-    ) -> None:
-        existing = check_idempotency(
-            self._event_id_index.get(event_id),
-            actor_id,
-            transition,
-            wi["work_item_id"],
-        )
-        if existing is not None:
-            return
-        now = datetime.now(UTC)
-        evt = _make_event(
-            event_id=event_id,
+    ) -> Event:
+        return _store_append(
+            self._store,
             work_item_id=wi["work_item_id"],
-            event_seq=wi["next_event_seq"],
             actor_id=actor_id,
             actor_kind=actor_kind,
             actor_metadata=None,
@@ -1430,33 +1288,18 @@ class InMemorySubstrate:
             workflow_version=wi["workflow_version"],
             transition=transition,
             payload=Jsonb(payload),
-            timestamp=now,
+            event_id=event_id,
             key_set=self._key_set,
         )
-        self._events.setdefault(wi["work_item_id"], []).append(evt)
-        self._event_id_index[event_id] = evt
-        wi["last_event_seq"] = wi["next_event_seq"]
-        wi["last_event_at"] = now
-        wi["next_event_seq"] += 1
 
     def _append_simple_event(
         self, wi: dict, event_id: uuid.UUID,
         actor_id: str, actor_kind: str, actor_metadata: Jsonb | None,
         transition: str, payload: Jsonb | None,
-    ) -> None:
-        existing = check_idempotency(
-            self._event_id_index.get(event_id),
-            actor_id,
-            transition,
-            wi["work_item_id"],
-        )
-        if existing is not None:
-            return
-        now = datetime.now(UTC)
-        evt = _make_event(
-            event_id=event_id,
+    ) -> Event:
+        return _store_append(
+            self._store,
             work_item_id=wi["work_item_id"],
-            event_seq=wi["next_event_seq"],
             actor_id=actor_id,
             actor_kind=actor_kind,
             actor_metadata=actor_metadata,
@@ -1464,14 +1307,9 @@ class InMemorySubstrate:
             workflow_version=wi["workflow_version"],
             transition=transition,
             payload=payload,
-            timestamp=now,
+            event_id=event_id,
             key_set=self._key_set,
         )
-        self._events.setdefault(wi["work_item_id"], []).append(evt)
-        self._event_id_index[event_id] = evt
-        wi["last_event_seq"] = wi["next_event_seq"]
-        wi["last_event_at"] = now
-        wi["next_event_seq"] += 1
 
     def _active_link_set(self, link_type: str) -> set[uuid.UUID]:
         result = set()

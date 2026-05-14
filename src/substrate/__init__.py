@@ -31,9 +31,8 @@ from ._contract import (
     validate_read_events_filters as _validate_read_events_filters,
 )
 from ._errors import ErrorCode, SubstrateError
-from ._events import (
-    append_event as _append_event,
-)
+from ._event_store import PostgresEventStore as _PostgresEventStore
+from ._event_store import append_event as _store_append_event
 from ._events import (
     append_transition_event as _append_transition_event,
 )
@@ -511,19 +510,20 @@ class Substrate:
                             wi_row["workflow_name"],
                         )
 
-                evt = _append_event(
-                    conn,
+                store = _PostgresEventStore(conn, self._keys)
+                evt = _store_append_event(
+                    store,
                     work_item_id=work_item_id,
                     actor_id=actor_id,
                     actor_kind=actor_kind,
                     actor_metadata=_Jsonb(actor_metadata) if actor_metadata is not None else None,
-                    key_set=self._keys,
                     workflow_name=wi_row["workflow_name"],
                     workflow_version=wi_row["workflow_version"],
                     transition=transition,
                     payload=_Jsonb(payload) if payload is not None else None,
                     event_id=event_id,
                     expected_event_seq=expected_event_seq,
+                    key_set=self._keys,
                 )
 
             self._metrics.inc("events_appended", self._project)
@@ -807,6 +807,7 @@ class Substrate:
         claimable_now: bool | None = None,
         needs_review: bool | None = None,
         has_link_type: str | None = None,
+        custom_field_filters: dict[str, object] | None = None,
         cursor: uuid.UUID | None = None,
         page_size: int = 100,
     ) -> QueryPage[WorkItem]:
@@ -821,6 +822,10 @@ class Substrate:
             claimable_now: True = unclaimed and ``not_before`` has passed.
             needs_review: Filter by escalation flag.
             has_link_type: Items with at least one active link of this type.
+            custom_field_filters: Equality filters on custom field values.
+                All entries must match (AND semantics). Keys not declared on
+                the queried work_item_type(s) match no rows (empty result, not
+                an error).
             cursor: Continue from a previous page's cursor.
             page_size: Items per page (default 100).
 
@@ -840,6 +845,7 @@ class Substrate:
                 claimable_now=claimable_now,
                 needs_review=needs_review,
                 has_link_type=has_link_type,
+                custom_field_filters=custom_field_filters,
                 cursor=cursor,
                 page_size=page_size,
             )

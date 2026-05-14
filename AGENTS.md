@@ -38,6 +38,7 @@ src/substrate/
   _work_items.py    # Create, query (FR-05b)
   _claims.py        # Claim lifecycle
   _links.py         # Typed directed links
+  _event_store.py   # EventStore protocol + shared append + InMemory/Postgres stores (BC-128)
   _replay.py        # Rebuild projection from event log
   _integrity.py     # Startup version compatibility checks
   _workflow.py      # YAML parse, JSON Schema validate, semantic checks
@@ -96,7 +97,7 @@ sub.acquire_claim(work_item_id, actor_id, ttl_seconds=300)
 sub.heartbeat_claim(work_item_id, actor_id, ttl_seconds, *, expected_attempt_number=...)
 sub.release_claim(work_item_id, actor_id)
 sub.sweep_expired_claims()
-sub.query_work_items(workflow_name=..., current_states=[...], claimable_now=True)
+sub.query_work_items(workflow_name=..., current_states=[...], claimable_now=True, custom_field_filters={...})
 sub.read_events(work_item_id=...)
 sub.create_link(from_id, to_id, link_type, actor_id, payload=...)
 sub.remove_link(from_id, to_id, link_type, actor_id)
@@ -151,6 +152,8 @@ Production readiness additions: migration packaging for pip installs (importlib.
 Phase 3 additions: FR-24 (actor → allowed_roles enforcement, closes BR-09), FR-25 (continue-on-revoked replay flag), FR-26 (update_not_before API), FR-27 (custom field validation at transition time). Migration `005_actor_roles.sql` adds the actor_roles table. ReplayReport gains `warnings` field.
 
 RFC-062: Single-source-of-truth backend contract via `_contract.py` — 20 pure validation/decision functions shared by both Postgres and InMemory backends. Property-based conformance tests via hypothesis in `tests/test_property_conformance.py`.
+
+BC-139: `query_work_items` accepts `custom_field_filters: dict[str, object] | None` for equality filtering on custom field values (AND semantics). Postgres uses JSONB containment (`@>`) with a GIN index. InMemory uses equivalent dict matching. Migration `009_custom_fields_gin.sql` adds the index. Unknown filter keys produce empty results, not errors.
 
 ## Conventions
 

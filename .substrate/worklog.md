@@ -4,6 +4,49 @@ Structured log of development sessions and milestones.
 
 ---
 
+## 2026-05-14 — Session 26: Resolve open breadcrumbs BC-140, BC-141; fix InMemory projection atomicity
+
+**Focus:** Resolve the two remaining open breadcrumbs.
+
+**Delivered:**
+
+1. **BC-141 — `_dict_contains` diverges from Postgres `@>` on nested JSON** — Replaced `_dict_contains` in `_in_memory.py` with recursive containment check matching Postgres `@>` semantics: deep dict containment, list subset matching, scalar equality. Added 3 conformance tests (`test_custom_field_filter_nested_json_containment`) exercising nested dict partial match, multi-key match, and empty-dict match on the `metadata` json field.
+
+2. **BC-140 — Property test `reuse_eid` strategy never fires** — Replaced `st.lists(operation())` with `st.data()` iterative draw approach in `test_random_sequences_equivalent` and `test_replay_equivalence`. New `_draw_operation(data, seen_event_ids)` generates event IDs at draw time so both backends receive the same value. Threaded `event_id_pool` between iterations enabling genuine idempotent retries.
+
+3. **InMemory projection atomicity bugs found and fixed** — The property test rewrite exposed three pre-existing InMemory backend bugs where projection fields were mutated before event append, with no rollback on failure:
+   - `acquire_claim`: moved `_claims` dict insertion, `claimed_by`, `claim_expires_at`, `attempt_number` updates to after `_append_claim_event`. Previously, a failed event append left stale claim state that corrupted subsequent `resolve_claim_acquire` decisions.
+   - `release_claim`: moved `_claims.pop()` and `claimed_by`/`claim_expires_at` clearing to after `_append_claim_event`.
+   - `create_work_item`: added try/except around `_store_append` to delete leaked work items from `_work_items` on failure, matching Postgres transaction rollback semantics.
+
+**Files modified:** `src/substrate/_in_memory.py`, `tests/test_property_conformance.py`, `tests/test_in_memory_conformance.py`, `breadcrumbs/README.md`.
+
+**BC resolved:** BC-140, BC-141.
+
+**Test results:** 411 passed + 6 slow property tests, lint clean. Zero open breadcrumbs.
+
+---
+
+## 2026-05-13 — Session 25: BC-128 EventStore protocol, spec §17 heartbeat invariant, conformance test hardening
+
+**Focus:** Implement BC-128 (EventStore extraction), document heartbeat invariant in spec §17, tighten property-based conformance tests.
+
+**Delivered:**
+
+1. **BC-128 — EventStore protocol** — New `_event_store.py` with `EventStore` runtime-checkable Protocol (4 methods: `allocate_seq`, `find_by_event_id`, `append`, `read`), shared `append_event()` helper that centralizes seq allocation + idempotency + signing + construction, `InMemoryEventStore` (dict-backed), and `PostgresEventStore` (SQL-backed).
+2. **InMemory fully migrated** — `_in_memory.py` refactored: all event append operations (create, append, transition, claim, link, escalation, dead-letter, update_not_before) go through shared `_store_append`. Removed `_make_event` helper and `_DUMMY_*` constants. InMemoryEventStore owns `events` and `event_id_index` dicts.
+3. **Postgres append_event migrated** — `Substrate.append_event` uses `PostgresEventStore` + shared `append_event`. Other Postgres operations (transition, claims, links) keep `_events.py` for now.
+4. **Spec §17.10 — Heartbeat invariant** — Documented that heartbeats don't emit events, `claim_expires_at` is the one mutable projection field replay cannot reconstruct, and NULL `claim_expires_at` with non-NULL `claimed_by` is treated as non-expired by design.
+5. **Conformance tests hardened** — `_compare_state` now checks `claimed_by` (was omitted). Added `idempotent_retry` operation to exercise event_id reuse. Fixed `uuid.uuid1()` deprecation (replaced with non-v4 UUID construction for adversarial test).
+
+**Files modified:** `src/substrate/_event_store.py` (new), `src/substrate/_in_memory.py`, `src/substrate/__init__.py`, `spec.md`, `tests/test_property_conformance.py`, `breadcrumbs/README.md`.
+
+**BC resolved:** BC-128.
+
+**Test results:** 411 passed (including 6 slow property tests), lint clean.
+
+---
+
 ## 2026-05-12 — Session 24: Resolve adversarial review BC-114–127, implement GLM structural proposals
 
 **Focus:** Fix all 14 issues from Kimi's adversarial review (4 critical, 6 high, 4 medium), implement GLM's shared-validation and hardened-conformance-test proposals, file BC-128 for EventStore extraction.
