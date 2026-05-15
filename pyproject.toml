@@ -25,6 +25,11 @@ dev = [
     "ruff>=0.5",
     "hypothesis>=6.100",
 ]
+sidecar = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.7",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/substrate"]

@@ -7,9 +7,23 @@ import sys
 import uuid
 from datetime import datetime
 
+import structlog
+
 from substrate import Substrate
 from substrate._errors import SubstrateError
 from substrate._workflow import validate_yaml as _validate_yaml
+
+
+class _StderrLoggerFactory:
+    def __call__(self, *args):
+        return structlog.PrintLogger(file=sys.stderr)
+
+
+def _configure_structlog_stderr():
+    structlog.configure(
+        wrapper_class=structlog.make_filtering_bound_logger(20),
+        logger_factory=_StderrLoggerFactory(),
+    )
 
 
 def _resolve_config(args):
@@ -266,7 +280,100 @@ def cmd_actor_roles_list(args):
         sub.close()
 
 
+def cmd_recurrence_list(args):
+    dsn, project, hmac_key_path = _require_config(args)
+    sub = Substrate(dsn, project, hmac_key_path)
+    try:
+        rules = sub.list_recurrence_rules(status=args.status)
+        if args.json:
+            _dump_json(rules)
+        else:
+            for r in rules:
+                rid = str(r["rule_id"])[:8]
+                print(
+                    f"{rid}  {r['workflow_name']:20s} "
+                    f"{r['schedule_kind']:10s} {r['status']:10s} "
+                    f"{r.get('next_fire_at', '')}"
+                )
+    except SubstrateError as e:
+        _handle_error(e)
+    finally:
+        sub.close()
+
+
+def cmd_recurrence_due(args):
+    dsn, project, hmac_key_path = _require_config(args)
+    sub = Substrate(dsn, project, hmac_key_path)
+    try:
+        rules = sub.due_recurrences()
+        if args.json:
+            _dump_json(rules)
+        else:
+            for r in rules:
+                rid = str(r["rule_id"])[:8]
+                print(
+                    f"{rid}  {r['workflow_name']:20s} "
+                    f"next_fire={r.get('next_fire_at', '')}"
+                )
+    except SubstrateError as e:
+        _handle_error(e)
+    finally:
+        sub.close()
+
+
+def cmd_recurrence_fire(args):
+    dsn, project, hmac_key_path = _require_config(args)
+    sub = Substrate(dsn, project, hmac_key_path)
+    try:
+        rule, wi = sub.fire_recurrence(uuid.UUID(args.id))
+        if args.json:
+            _dump_json({"rule": rule, "work_item": wi})
+        else:
+            rid = str(rule["rule_id"])[:8]
+            wi_id = str(wi["work_item_id"])[:8] if wi else "(none)"
+            print(f"Fired rule {rid} -> work item {wi_id}")
+    except SubstrateError as e:
+        _handle_error(e)
+    finally:
+        sub.close()
+
+
+def cmd_recurrence_cancel(args):
+    dsn, project, hmac_key_path = _require_config(args)
+    sub = Substrate(dsn, project, hmac_key_path)
+    try:
+        sub.cancel_recurrence_rule(uuid.UUID(args.id))
+        print(f"Cancelled recurrence rule {args.id}")
+    except SubstrateError as e:
+        _handle_error(e)
+    finally:
+        sub.close()
+
+
+def cmd_recurrence_update(args):
+    dsn, project, hmac_key_path = _require_config(args)
+    sub = Substrate(dsn, project, hmac_key_path)
+    try:
+        updates = {}
+        if args.status is not None:
+            updates["status"] = args.status
+        if args.schedule_expr is not None:
+            updates["schedule_expr"] = args.schedule_expr
+        if args.template is not None:
+            updates["template"] = json.loads(args.template)
+        result = sub.update_recurrence_rule(uuid.UUID(args.id), **updates)
+        if args.json:
+            _dump_json(result)
+        else:
+            print(f"Updated rule {args.id}")
+    except SubstrateError as e:
+        _handle_error(e)
+    finally:
+        sub.close()
+
+
 def main(argv=None):
+    _configure_structlog_stderr()
     parser = argparse.ArgumentParser(prog="substrate", description="Substrate admin CLI")
     _add_common_args(parser)
     subs = parser.add_subparsers(dest="command")
@@ -331,6 +438,22 @@ def main(argv=None):
     ar_list = ar_sub.add_parser("list", help="List actor roles")
     ar_list.add_argument("--actor", help="Filter by actor_id")
 
+    # recurrence
+    rc = subs.add_parser("recurrence", help="Recurrence rule commands")
+    rc_sub = rc.add_subparsers(dest="subcommand")
+    rc_list = rc_sub.add_parser("list", help="List recurrence rules")
+    rc_list.add_argument("--status", help="Filter by status (active/cancelled/exhausted)")
+    rc_sub.add_parser("due", help="Show due recurrence rules")
+    rc_fire = rc_sub.add_parser("fire", help="Fire a due recurrence rule")
+    rc_fire.add_argument("id", help="Rule UUID")
+    rc_cancel = rc_sub.add_parser("cancel", help="Cancel a recurrence rule")
+    rc_cancel.add_argument("id", help="Rule UUID")
+    rc_update = rc_sub.add_parser("update", help="Update a recurrence rule")
+    rc_update.add_argument("id", help="Rule UUID")
+    rc_update.add_argument("--status", help="New status")
+    rc_update.add_argument("--schedule-expr", help="New schedule expression")
+    rc_update.add_argument("--template", help="New template (JSON string)")
+
     args = parser.parse_args(argv)
 
     if not args.command:
@@ -363,6 +486,16 @@ def main(argv=None):
             sys.exit(2)
     elif args.command == "actor-roles" and args.subcommand == "list":
         cmd_actor_roles_list(args)
+    elif args.command == "recurrence" and args.subcommand == "list":
+        cmd_recurrence_list(args)
+    elif args.command == "recurrence" and args.subcommand == "due":
+        cmd_recurrence_due(args)
+    elif args.command == "recurrence" and args.subcommand == "fire":
+        cmd_recurrence_fire(args)
+    elif args.command == "recurrence" and args.subcommand == "cancel":
+        cmd_recurrence_cancel(args)
+    elif args.command == "recurrence" and args.subcommand == "update":
+        cmd_recurrence_update(args)
     else:
         target = subs.choices.get(args.command)
         if target:

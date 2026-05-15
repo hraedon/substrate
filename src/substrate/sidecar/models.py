@@ -1,0 +1,209 @@
+from __future__ import annotations
+
+import uuid
+from datetime import datetime
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict
+
+
+def _serialize(obj):
+    if obj is None:
+        return None
+    if hasattr(obj, "to_dict"):
+        return obj.to_dict()
+    if isinstance(obj, uuid.UUID):
+        return str(obj)
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    if isinstance(obj, bytes):
+        return obj.hex()
+    if isinstance(obj, list):
+        return [_serialize(i) for i in obj]
+    if isinstance(obj, dict):
+        return {k: _serialize(v) for k, v in obj.items()}
+    return obj
+
+
+class RegisterWorkflowRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    yaml_content: str
+
+
+class CreateWorkItemRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    workflow_name: str
+    work_item_type: str
+    actor_kind: str = "agent"
+    actor_metadata: dict | None = None
+    custom_fields: dict | None = None
+    not_before: str | None = None
+    event_id: str | None = None
+
+
+class AppendEventRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    work_item_id: str
+    actor_kind: str = "agent"
+    actor_metadata: dict | None = None
+    transition: str | None = None
+    payload: dict | None = None
+    event_id: str | None = None
+    expected_event_seq: int | None = None
+
+
+class TransitionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    work_item_id: str
+    transition_name: str
+    actor_kind: str = "agent"
+    actor_metadata: dict | None = None
+    payload: dict | None = None
+    custom_fields: dict | None = None
+    event_id: str | None = None
+    expected_event_seq: int | None = None
+
+
+class ReadEventsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    work_item_id: str | None = None
+    actor_id: str | None = None
+    start: str | None = None
+    end: str | None = None
+    transition: str | None = None
+    limit: int = 100
+    before_seq: int | None = None
+
+
+class ReadEventsSinceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    work_item_id: str
+    after_seq: int
+    limit: int = 100
+
+
+class QueryWorkItemsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    workflow_name: str | None = None
+    workflow_version: int | None = None
+    work_item_types: list[str] | None = None
+    current_states: list[str] | None = None
+    claimed_by: str | None = None
+    claimable_now: bool | None = None
+    needs_review: bool | None = None
+    has_link_type: str | None = None
+    custom_field_filters: dict[str, Any] | None = None
+    cursor: str | None = None
+    page_size: int = 100
+
+
+class AcquireClaimRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    work_item_id: str
+    ttl_seconds: int = 300
+    event_id: str | None = None
+    actor_kind: str = "agent"
+
+
+class HeartbeatClaimRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    work_item_id: str
+    ttl_seconds: int = 300
+    expected_attempt_number: int | None = None
+
+
+class ReleaseClaimRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    work_item_id: str
+    event_id: str | None = None
+    actor_kind: str = "agent"
+
+
+class CreateLinkRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    from_work_item_id: str
+    to_work_item_id: str
+    link_type: str
+    actor_kind: str = "agent"
+    actor_metadata: dict | None = None
+    event_id: str | None = None
+    payload: dict | None = None
+
+
+class RemoveLinkRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    from_work_item_id: str
+    to_work_item_id: str
+    link_type: str
+    actor_kind: str = "agent"
+    actor_metadata: dict | None = None
+    event_id: str | None = None
+
+
+class UpdateNotBeforeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    work_item_id: str
+    not_before: str | None = None
+    actor_kind: str = "agent"
+    actor_metadata: dict | None = None
+    event_id: str | None = None
+
+
+class ReplayRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    continue_on_revoked: bool = False
+
+
+class RegisterActorRoleRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    role: str
+
+
+class UnregisterActorRoleRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    role: str
+
+
+class GetWorkflowRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class RegisterRecurrenceRuleRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    workflow_name: str
+    workflow_version: int
+    work_item_type: str
+    template: dict
+    schedule_kind: str
+    schedule_expr: str
+    timezone: str = "UTC"
+    start_at: str | None = None
+    end_at: str | None = None
+    count: int | None = None
+    catchup_policy: str = "fire_once"
+
+
+class CancelRecurrenceRuleRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class UpdateRecurrenceRuleRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    status: str | None = None
+    schedule_expr: str | None = None
+    template: dict | None = None
+
+
+class ClaimHooksRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    max_batch: int = 10
+    lease_seconds: int = 60
+
+
+class CompleteHookRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class FailHookRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    error: str

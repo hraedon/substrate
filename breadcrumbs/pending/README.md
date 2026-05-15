@@ -11,17 +11,4 @@ Drafts here use the same frontmatter as numbered breadcrumbs, with `number: "pen
 
 ## Open
 
-| # | Title | Severity | Notes |
-|---|---|---|---|
-| 100 | HMAC key material held in plaintext Python memory | critical | security |
-| 101 | actor_metadata role claim is self-attested without independent verification | critical | security/auth |
-| 102 | No rate limiting on any public API endpoint | critical | denial-of-service |
-| 103 | Client-supplied event_id not validated as UUIDv4; no entropy guarantees | critical | idempotency |
-| 104 | expected_event_seq missing from create_link and remove_link — TOCTOU race | high | concurrency |
-| 105 | Replay skip of revoked-key events with continue_on_revoked=True leaves bad events in log | high | security/replay |
-| 106 | Unbounded not_before allows permanent work-item DOS | high | denial-of-service |
-| 107 | validate_work_item_refs propagates unhandled ValueError from uuid.UUID() | medium | custom-fields |
-| 108 | synchronous_commit set per-session, not per-transaction | medium | durability (review: likely false positive) |
-| 109 | synchronous_commit configure callback raises silently on connection failure | medium | durability |
-| 110 | custom_fields merge in append_transition_event is shallow, not deep | medium | custom-fields |
-| 111 | JSON Schema permits additionalProperties:true everywhere — workflow isolation unclear | medium | workflow |
+_(none)_

@@ -56,6 +56,17 @@ src/substrate/
   _workflow_compose.py  # Workflow YAML composition via `extends:` (FR-29)
   _cli.py               # Admin CLI entry point (Plan 002)
   _recurrence.py        # Recurring work-item schedule engine (FR-28)
+  _recurrence_api.py    # Thin facade for recurrence on Substrate class
+  _transition.py        # Extracted transition logic (delegated from Substrate)
+  sidecar/              # HTTP sidecar (Plan 005, optional)
+    __init__.py
+    __main__.py         # Entry point: python -m substrate.sidecar
+    app.py              # FastAPI app factory + error/middleware setup
+    auth.py             # Bearer-token registry (SHA-256 hashed tokens)
+    routes.py           # 1:1 pass-through of Substrate public API
+    routes_hooks.py     # Hook claim/complete/fail endpoints
+    models.py           # Pydantic request/response models (extra="forbid")
+    errors.py           # ErrorCode → HTTP status mapping
 ```
 
 ## Testing
@@ -155,16 +166,21 @@ compose_workflow(file_or_path)                         # -> composed dict + Sour
 
 ## Status
 
-MVP + Phase 2 + Phase 3 + Plans 002-004 implemented. All FRs FR-01 through FR-29 are in tree. 476 tests + 4 scale benchmarks passing.
+MVP + Phase 2 + Phase 3 + Plans 002-005 implemented. All FRs FR-01 through FR-29 are in tree. 528 tests (511 core + 17 sidecar) + 4 scale benchmarks passing.
 
-Production readiness additions: migration packaging for pip installs (importlib.resources + force-include), claims_stolen metric wired, actor_kind validation at API boundary, docstrings on all public methods, spec.yaml synced to v4, structured replay error handling.
+Production readiness additions: migration packaging for pip installs (importlib.resources + force-include), claims_stolen metric wired, actor_kind validation at API boundary, docstrings on all public methods, spec.yaml synced to v4, structured replay error handling, CHANGELOG.md.
 
 Phase 3 additions: FR-24 (actor → allowed_roles enforcement, closes BR-09), FR-25 (continue-on-revoked replay flag), FR-26 (update_not_before API), FR-27 (custom field validation at transition time). Migration `005_actor_roles.sql` adds the actor_roles table. ReplayReport gains `warnings` field.
 
 Plans 002-004 additions:
-- **Plan 002 (Admin CLI):** `substrate` console entry point (`src/substrate/_cli.py`). Commands: `workflow validate`, `work-item show/list`, `events show/tail`, `replay`, `schema init/status`, `hooks dead-letter list/requeue`, `actor-roles list`. No DB required for `workflow validate`. Integration tested but CLI integration tests not yet added.
+- **Plan 002 (Admin CLI):** `substrate` console entry point (`src/substrate/_cli.py`). Commands: `workflow validate`, `work-item show/list`, `events show/tail`, `replay`, `schema init/status`, `hooks dead-letter list/requeue`, `actor-roles list`, `recurrence list/due/fire/cancel/update`. No DB required for `workflow validate`. Structlog routes to stderr in CLI mode.
 - **Plan 003 (Recurring work-items, FR-28):** New `recurrence_rules` table (migration 012). Schedule kinds: `interval` and `rrule`. Public API on `Substrate` and `InMemorySubstrate`: `register_recurrence_rule`, `list_recurrence_rules`, `due_recurrences`, `fire_recurrence`, `cancel_recurrence_rule`, `update_recurrence_rule`. New error codes: `RECURRENCE_RULE_NOT_FOUND`, `RECURRENCE_RULE_EXHAUSTED`, `RECURRENCE_SCHEDULE_INVALID`, `RECURRENCE_TEMPLATE_INVALID`. Dependency: `python-dateutil`.
 - **Plan 004 (Workflow composition, FR-29):** `_workflow_compose.py` with `resolve_includes`, `_deep_merge`, and `compose_workflow`. `extends:` field added to JSON Schema. `parse_file()` now resolves composition. Keyed list merge by `(name, from)` for transitions, `__append`/`__remove` list modifiers. New error code `WORKFLOW_COMPOSE_ERROR`.
+
+Plan 005 additions:
+- **Plan 005 (HTTP sidecar):** `src/substrate/sidecar/` package with FastAPI. 1:1 pass-through of the Substrate public API. Bearer-token auth via SHA-256 hashed token registry. Sole-signer middleware rejects `signature`/`payload_canonical_hash` fields. Hook claim/complete/fail lifecycle for non-Python consumers. ErrorCode → HTTP status mapping. Optional install extra `[sidecar]`. Dockerfile in `deploy/sidecar/`. 17 integration tests.
+
+Code structure: `transition()` extracted to `_transition.py`, `recurrence` API extracted to `_recurrence_api.py`, reducing `__init__.py` from ~1580 to ~1400 lines.
 
 RFC-062: Single-source-of-truth backend contract via `_contract.py` — 20 pure validation/decision functions shared by both Postgres and InMemory backends. Property-based conformance tests via hypothesis in `tests/test_property_conformance.py`.
 

@@ -1,0 +1,62 @@
+from __future__ import annotations
+
+import os
+import sys
+
+import structlog
+
+
+def _configure_structlog_stderr():
+    structlog.configure(
+        wrapper_class=structlog.make_filtering_bound_logger(20),
+        logger_factory=structlog.PrintLoggerFactory(file=sys.stderr),
+    )
+
+
+def main():
+    _configure_structlog_stderr()
+
+    dsn = os.environ.get("SUBSTRATE_DSN")
+    project = os.environ.get("SUBSTRATE_PROJECT")
+    hmac_key_path = os.environ.get("SUBSTRATE_HMAC_KEY_PATH")
+    tokens_path = os.environ.get("SUBSTRATE_TOKENS_PATH")
+    bind = os.environ.get("SUBSTRATE_BIND", "0.0.0.0:8080")
+    pool_min = int(os.environ.get("SUBSTRATE_POOL_MIN", "1"))
+    pool_max = int(os.environ.get("SUBSTRATE_POOL_MAX", "10"))
+
+    missing = []
+    if not dsn:
+        missing.append("SUBSTRATE_DSN")
+    if not project:
+        missing.append("SUBSTRATE_PROJECT")
+    if not hmac_key_path:
+        missing.append("SUBSTRATE_HMAC_KEY_PATH")
+    if not tokens_path:
+        missing.append("SUBSTRATE_TOKENS_PATH")
+    if missing:
+        print(f"Missing required env vars: {', '.join(missing)}", file=sys.stderr)
+        sys.exit(2)
+
+    host, port_str = bind.rsplit(":", 1)
+    port = int(port_str)
+
+    from substrate import Substrate
+
+    sub = Substrate(
+        dsn, project, hmac_key_path,
+        pool_min=pool_min, pool_max=pool_max,
+    )
+
+    from .app import create_app
+    from .auth import TokenRegistry
+
+    tokens = TokenRegistry.from_file(tokens_path)
+    app = create_app(sub, tokens)
+
+    import uvicorn
+
+    uvicorn.run(app, host=host, port=port, log_level="info")
+
+
+if __name__ == "__main__":
+    main()

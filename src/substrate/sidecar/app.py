@@ -1,0 +1,68 @@
+from __future__ import annotations
+
+import json
+
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+
+from substrate._errors import SubstrateError
+
+from .auth import TokenRegistry
+from .errors import error_to_status
+from .routes import register_routes
+from .routes_hooks import register_hook_routes
+
+
+def create_app(substrate, tokens: TokenRegistry) -> FastAPI:
+    app = FastAPI(
+        title="Substrate Sidecar",
+        version="0.1.0",
+        docs_url="/docs",
+        openapi_url="/openapi.json",
+    )
+
+    @app.middleware("http")
+    async def sole_signer_middleware(request: Request, call_next):
+        if request.method == "POST" and request.url.path.startswith("/v1"):
+            body_bytes = await request.body()
+            if body_bytes:
+                try:
+                    raw = json.loads(body_bytes)
+                    if isinstance(raw, dict) and (
+                        "signature" in raw or "payload_canonical_hash" in raw
+                    ):
+                        return JSONResponse(
+                            status_code=400,
+                            content={
+                                "error": {
+                                    "code": "LIBRARY_IS_SOLE_SIGNER",
+                                    "message": (
+                                        "Requests must not contain signature "
+                                        "or payload_canonical_hash fields"
+                                    ),
+                                    "detail": None,
+                                }
+                            },
+                        )
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    pass
+        return await call_next(request)
+
+    register_routes(app, substrate, tokens)
+    register_hook_routes(app, substrate, tokens)
+
+    @app.exception_handler(SubstrateError)
+    async def substrate_error_handler(request: Request, exc: SubstrateError):
+        status = error_to_status(exc.code)
+        return JSONResponse(
+            status_code=status,
+            content={
+                "error": {
+                    "code": str(exc.code),
+                    "message": exc.message,
+                    "detail": exc.detail,
+                }
+            },
+        )
+
+    return app
