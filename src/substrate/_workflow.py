@@ -250,7 +250,10 @@ def validate_and_build(data: dict, raw_yaml: str) -> WorkflowDefinition:
 
 
 def parse_file(path: str | Path) -> WorkflowDefinition:
-    return parse_and_validate(Path(path).read_text())
+    from ._workflow_compose import compose_workflow
+
+    data, _ = compose_workflow(path)
+    return validate_and_build(data, "")
 
 
 def validate_field_values(
@@ -480,6 +483,10 @@ def validate_yaml(source: str | Path) -> ValidationResult:
         data = parse_workflow_yaml(raw)
     except SubstrateError as e:
         errors.append(ValidationError(path="(root)", message=str(e)))
+        return ValidationResult(valid=False, errors=errors)
+
+    if data is None:
+        errors.append(ValidationError(path="(root)", message="YAML document is empty"))
         return ValidationResult(valid=False, errors=errors)
 
     try:

@@ -100,6 +100,7 @@ class InMemorySubstrate:
         self._hook_id_counter = 0
         self._dead_letter: dict[int, dict] = {}
         self._hook_consumer_running = False
+        self._recurrence_rules: dict[uuid.UUID, dict] = {}
 
     @classmethod
     def create_project(
@@ -1193,6 +1194,180 @@ class InMemorySubstrate:
             if actor_id is None or aid == actor_id:
                 result.append(ActorRole(actor_id=aid, role=role, created_at=created_at))
         return sorted(result, key=lambda r: (r.actor_id, r.role))
+
+    def register_recurrence_rule(
+        self,
+        workflow_name: str,
+        workflow_version: int,
+        work_item_type: str,
+        template: dict,
+        schedule_kind: str,
+        schedule_expr: str,
+        *,
+        timezone: str = "UTC",
+        start_at: datetime | None = None,
+        end_at: datetime | None = None,
+        count: int | None = None,
+        catchup_policy: str = "fire_once",
+        created_by: str = "system",
+    ) -> dict:
+        if start_at is None:
+            start_at = datetime.now(UTC)
+        wf_key = (workflow_name, workflow_version)
+        if wf_key not in self._workflow_defs:
+            raise SubstrateError(
+                ErrorCode.WORKFLOW_NOT_REGISTERED,
+                f"Workflow {workflow_name!r} v{workflow_version} not registered",
+            )
+        existing = None
+        for r in self._recurrence_rules.values():
+            if (
+                r["workflow_name"], r["workflow_version"], r["work_item_type"]
+            ) == (workflow_name, workflow_version, work_item_type):
+                if r["status"] == "active":
+                    existing = r
+                    break
+        if existing is not None:
+            return existing
+        rule_id = uuid.uuid4()
+        rule = {
+            "rule_id": rule_id,
+            "workflow_name": workflow_name,
+            "workflow_version": workflow_version,
+            "work_item_type": work_item_type,
+            "template": template,
+            "schedule_kind": schedule_kind,
+            "schedule_expr": schedule_expr,
+            "timezone": timezone,
+            "start_at": start_at,
+            "end_at": end_at,
+            "count_remaining": count,
+            "status": "active",
+            "catchup_policy": catchup_policy,
+            "last_fired_at": None,
+            "next_fire_at": start_at,
+            "created_by": created_by,
+            "created_at": datetime.now(UTC),
+            "updated_at": datetime.now(UTC),
+        }
+        self._recurrence_rules[rule_id] = rule
+        return rule
+
+    def list_recurrence_rules(self, status: str | None = None) -> list[dict]:
+        result = []
+        for r in self._recurrence_rules.values():
+            if status is None or r["status"] == status:
+                result.append(dict(r))
+        return sorted(result, key=lambda r: r["created_at"])
+
+    def due_recurrences(self, now: datetime | None = None) -> list[dict]:
+        if now is None:
+            now = datetime.now(UTC)
+        result = []
+        for r in self._recurrence_rules.values():
+            if r["status"] == "active" and r["next_fire_at"] <= now:
+                result.append(dict(r))
+        return sorted(result, key=lambda r: r["next_fire_at"])
+
+    def fire_recurrence(self, rule_id: uuid.UUID) -> tuple[dict, dict]:
+        from ._recurrence import compute_next_fire
+        rule = self._recurrence_rules.get(rule_id)
+        if rule is None:
+            raise SubstrateError(
+                ErrorCode.RECURRENCE_RULE_NOT_FOUND,
+                f"Recurrence rule {rule_id} not found",
+            )
+        if rule["status"] != "active":
+            raise SubstrateError(
+                ErrorCode.RECURRENCE_RULE_EXHAUSTED,
+                f"Recurrence rule {rule_id} is {rule['status']!r}",
+            )
+        now = datetime.now(UTC)
+        if rule["next_fire_at"] > now:
+            return rule, None
+        scheduled_fire_at = rule["next_fire_at"]
+        next_fire = compute_next_fire(
+            rule["schedule_kind"],
+            rule["schedule_expr"],
+            rule["timezone"],
+            rule["start_at"],
+            scheduled_fire_at,
+            rule["end_at"],
+        )
+        template = rule["template"]
+        not_before_offset = template.get("not_before_offset_seconds", 0)
+        not_before = (
+            scheduled_fire_at + timedelta(seconds=not_before_offset)
+            if not_before_offset
+            else scheduled_fire_at
+        )
+        custom_fields = template.get("custom_fields", {})
+        event_id = uuid.uuid5(rule_id, scheduled_fire_at.isoformat())
+        wi, _evt = self.create_work_item(
+            workflow_name=rule["workflow_name"],
+            work_item_type=rule["work_item_type"],
+            actor_id="system:scheduler",
+            actor_kind="system",
+            actor_metadata={
+                "recurrence_rule_id": str(rule_id),
+                "scheduled_fire_at": scheduled_fire_at.isoformat(),
+            },
+            custom_fields=custom_fields,
+            not_before=not_before,
+            event_id=event_id,
+        )
+        new_count = rule["count_remaining"]
+        if new_count is not None:
+            new_count -= 1
+            if new_count <= 0:
+                new_count = None
+        if next_fire is None:
+            new_status = "exhausted"
+        else:
+            if new_count is not None and new_count <= 0:
+                new_status = "exhausted"
+                next_fire = None
+            else:
+                new_status = "active"
+        rule["last_fired_at"] = now
+        rule["next_fire_at"] = next_fire or now + timedelta(days=36500)
+        rule["count_remaining"] = new_count
+        rule["status"] = new_status
+        rule["updated_at"] = now
+        return rule, dict(wi.to_dict()) if hasattr(wi, "to_dict") else dict(wi)
+
+    def cancel_recurrence_rule(self, rule_id: uuid.UUID) -> None:
+        rule = self._recurrence_rules.get(rule_id)
+        if rule is None:
+            raise SubstrateError(
+                ErrorCode.RECURRENCE_RULE_NOT_FOUND,
+                f"Recurrence rule {rule_id} not found",
+            )
+        rule["status"] = "cancelled"
+        rule["updated_at"] = datetime.now(UTC)
+
+    def update_recurrence_rule(
+        self,
+        rule_id: uuid.UUID,
+        *,
+        status: str | None = None,
+        schedule_expr: str | None = None,
+        template: dict | None = None,
+    ) -> dict:
+        rule = self._recurrence_rules.get(rule_id)
+        if rule is None:
+            raise SubstrateError(
+                ErrorCode.RECURRENCE_RULE_NOT_FOUND,
+                f"Recurrence rule {rule_id} not found",
+            )
+        if status is not None:
+            rule["status"] = status
+        if schedule_expr is not None:
+            rule["schedule_expr"] = schedule_expr
+        if template is not None:
+            rule["template"] = template
+        rule["updated_at"] = datetime.now(UTC)
+        return dict(rule)
 
     @staticmethod
     def validate_actor_metadata(

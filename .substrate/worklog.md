@@ -4,6 +4,50 @@ Structured log of development sessions and milestones.
 
 ---
 
+## 2026-05-15 — Session 27: Implement Plans 002–004 (Admin CLI, Recurring Work Items, Workflow Composition)
+
+**Focus:** Deliver all three pending plans.
+
+**Delivered:**
+
+1. **Plan 002 — Admin CLI (`src/substrate/_cli.py`, `tests/test_cli_args.py`)**
+   - argparse-based CLI with subparser tree: `workflow validate`, `work-item show/list`, `events show/tail`, `replay`, `schema init/status`, `hooks dead-letter list/requeue`, `actor-roles list`.
+   - Config resolution: `--dsn`/`--project`/`--hmac-key-path` flags with `SUBSTRATE_*` env var fallback.
+   - `workflow validate` requires no DB config; all other DB commands instantiate `Substrate` via the public constructor.
+   - `--json` output flag on every command; exit codes 0/1/2.
+   - `pyproject.toml` entry point: `[project.scripts] substrate = "substrate._cli:main"`.
+   - 14 unit tests for argument parsing, env precedence, missing-config exits, JSON schema snapshots, workflow validate good/bad paths.
+
+2. **Plan 003 — Recurring Work Items (`src/substrate/_recurrence.py`, `migrations/012_recurrence_rules.sql`, `tests/test_recurrence.py`)**
+   - Migration `012_recurrence_rules.sql`: new `recurrence_rules` table with `schedule_kind`/`schedule_expr`, `timezone`, `start_at`/`end_at`, `count_remaining`, `catchup_policy`, `next_fire_at` index.
+   - Pure functions: `compute_next_fire` (interval + RRULE), `validate_schedule`, `validate_template`.
+   - Postgres backend functions: `register_recurrence_rule`, `list_recurrence_rules`, `due_recurrences`, `fire_recurrence` (calls existing `create_work_item` under FOR UPDATE), `cancel_recurrence_rule`, `update_recurrence_rule`.
+   - Public API on `Substrate` and `InMemorySubstrate`: `register_recurrence_rule`, `list_recurrence_rules`, `due_recurrences`, `fire_recurrence`, `cancel_recurrence_rule`, `update_recurrence_rule`.
+   - `RecurrenceRule` frozen dataclass added to `_types.py` with `to_dict`/`from_dict`.
+   - New `ErrorCode`s: `RECURRENCE_RULE_NOT_FOUND`, `RECURRENCE_RULE_EXHAUSTED`, `RECURRENCE_SCHEDULE_INVALID`, `RECURRENCE_TEMPLATE_INVALID`.
+   - `python-dateutil>=2.9` added to `pyproject.toml` dependencies.
+   - 16 tests covering interval/rrule next-fire computation, end_at boundary, invalid schedules/templates, RecurrenceRule roundtrip.
+
+3. **Plan 004 — Workflow Composition (`src/substrate/_workflow_compose.py`, `tests/test_workflow_compose.py`)**
+   - `_workflow_compose.py`: `resolve_includes` with cycle detection, max depth (8), compose-root path-escape prevention, per-invocation memoization.
+   - `_deep_merge`: map deep-merge, list keyed merge by `(name, from)` for transitions / `name` for states/roles/types, `__append`/`__remove` list modifiers.
+   - `parse_file()` updated to call `compose_workflow()` before `validate_and_build`.
+   - `_workflow_schema.json`: added optional `extends: { type: string }`.
+   - New `ErrorCode.WORKFLOW_COMPOSE_ERROR`.
+   - 18 tests: override scalar/deep dict, keyed list merge/append/remove, composite key, cycle detection, max depth, path escape, missing parent, diamond inheritance, composed transitions with `__append`.
+
+4. **Documentation**
+   - `spec.md`: updated out-of-scope line for composition (now implemented); added FR-28 and FR-29 requirements.
+   - `AGENTS.md`: updated status (476 tests passing), source layout block, public API standalone utilities (`compose_workflow`), Plan summaries.
+
+**Files modified/created:**
+- New: `src/substrate/_cli.py`, `src/substrate/_recurrence.py`, `src/substrate/_workflow_compose.py`, `migrations/012_recurrence_rules.sql`, `tests/test_cli_args.py`, `tests/test_recurrence.py`, `tests/test_workflow_compose.py`
+- Modified: `src/substrate/__init__.py`, `src/substrate/_in_memory.py`, `src/substrate/_types.py`, `src/substrate/_errors.py`, `src/substrate/_workflow.py`, `src/substrate/_workflow_schema.json`, `pyproject.toml`, `spec.md`, `AGENTS.md`
+
+**Test results:** 476 passed (up from 432), lint clean.
+
+---
+
 ## 2026-05-14 — Session 26: Resolve open breadcrumbs BC-140, BC-141; fix InMemory projection atomicity
 
 **Focus:** Resolve the two remaining open breadcrumbs.

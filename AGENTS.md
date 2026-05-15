@@ -53,6 +53,9 @@ src/substrate/
   _types.py         # Frozen dataclasses for domain types
   _testing.py       # Test-only helpers (centralizes _mgr coupling)
   _workflow_schema.json  # JSON Schema for workflow YAML files
+  _workflow_compose.py  # Workflow YAML composition via `extends:` (FR-29)
+  _cli.py               # Admin CLI entry point (Plan 002)
+  _recurrence.py        # Recurring work-item schedule engine (FR-28)
 ```
 
 ## Testing
@@ -128,6 +131,7 @@ sub.list_actor_roles(actor_id=None)                  # list registered roles
 
 # Standalone utilities (no database required)
 validate_yaml(yaml_string_or_path)                     # -> ValidationResult
+compose_workflow(file_or_path)                         # -> composed dict + SourceMap (FR-29)
 ```
 
 **API constraints:**
@@ -151,11 +155,16 @@ validate_yaml(yaml_string_or_path)                     # -> ValidationResult
 
 ## Status
 
-MVP + Phase 2 + Phase 3 implemented. Production readiness sweep complete. All FRs FR-01 through FR-27 are in tree. 432 tests + 4 scale benchmarks passing. Plans for pull-forward work live in `plans/` (events partitioning and hook-queue decomposition landed; admin CLI, recurring work-items, workflow composition, HTTP sidecar still pending).
+MVP + Phase 2 + Phase 3 + Plans 002-004 implemented. All FRs FR-01 through FR-29 are in tree. 476 tests + 4 scale benchmarks passing.
 
 Production readiness additions: migration packaging for pip installs (importlib.resources + force-include), claims_stolen metric wired, actor_kind validation at API boundary, docstrings on all public methods, spec.yaml synced to v4, structured replay error handling.
 
 Phase 3 additions: FR-24 (actor → allowed_roles enforcement, closes BR-09), FR-25 (continue-on-revoked replay flag), FR-26 (update_not_before API), FR-27 (custom field validation at transition time). Migration `005_actor_roles.sql` adds the actor_roles table. ReplayReport gains `warnings` field.
+
+Plans 002-004 additions:
+- **Plan 002 (Admin CLI):** `substrate` console entry point (`src/substrate/_cli.py`). Commands: `workflow validate`, `work-item show/list`, `events show/tail`, `replay`, `schema init/status`, `hooks dead-letter list/requeue`, `actor-roles list`. No DB required for `workflow validate`. Integration tested but CLI integration tests not yet added.
+- **Plan 003 (Recurring work-items, FR-28):** New `recurrence_rules` table (migration 012). Schedule kinds: `interval` and `rrule`. Public API on `Substrate` and `InMemorySubstrate`: `register_recurrence_rule`, `list_recurrence_rules`, `due_recurrences`, `fire_recurrence`, `cancel_recurrence_rule`, `update_recurrence_rule`. New error codes: `RECURRENCE_RULE_NOT_FOUND`, `RECURRENCE_RULE_EXHAUSTED`, `RECURRENCE_SCHEDULE_INVALID`, `RECURRENCE_TEMPLATE_INVALID`. Dependency: `python-dateutil`.
+- **Plan 004 (Workflow composition, FR-29):** `_workflow_compose.py` with `resolve_includes`, `_deep_merge`, and `compose_workflow`. `extends:` field added to JSON Schema. `parse_file()` now resolves composition. Keyed list merge by `(name, from)` for transitions, `__append`/`__remove` list modifiers. New error code `WORKFLOW_COMPOSE_ERROR`.
 
 RFC-062: Single-source-of-truth backend contract via `_contract.py` — 20 pure validation/decision functions shared by both Postgres and InMemory backends. Property-based conformance tests via hypothesis in `tests/test_property_conformance.py`.
 

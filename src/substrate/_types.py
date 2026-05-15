@@ -737,3 +737,74 @@ class DeadLetterEntry:
             dead_lettered_at=datetime.fromisoformat(data["dead_lettered_at"]),
             original_hook_queue_id=data.get("original_hook_queue_id"),
         )
+
+
+@dataclass(frozen=True)
+class RecurrenceRule:
+    rule_id: uuid.UUID
+    workflow_name: str
+    workflow_version: int
+    work_item_type: str
+    template: dict
+    schedule_kind: str
+    schedule_expr: str
+    timezone: str
+    start_at: datetime
+    end_at: datetime | None
+    count_remaining: int | None
+    status: str
+    catchup_policy: str
+    last_fired_at: datetime | None
+    next_fire_at: datetime
+    created_by: str
+    created_at: datetime
+    updated_at: datetime
+
+    def to_dict(self) -> dict:
+        return {
+            "rule_id": str(self.rule_id),
+            "workflow_name": self.workflow_name,
+            "workflow_version": self.workflow_version,
+            "work_item_type": self.work_item_type,
+            "template": self.template,
+            "schedule_kind": self.schedule_kind,
+            "schedule_expr": self.schedule_expr,
+            "timezone": self.timezone,
+            "start_at": self.start_at.isoformat(),
+            "end_at": self.end_at.isoformat() if self.end_at else None,
+            "count_remaining": self.count_remaining,
+            "status": self.status,
+            "catchup_policy": self.catchup_policy,
+            "last_fired_at": self.last_fired_at.isoformat() if self.last_fired_at else None,
+            "next_fire_at": self.next_fire_at.isoformat(),
+            "created_by": self.created_by,
+            "created_at": self.created_at.isoformat(),
+            "updated_at": self.updated_at.isoformat(),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> RecurrenceRule:
+        return cls(
+            rule_id=uuid.UUID(data["rule_id"]),
+            workflow_name=data["workflow_name"],
+            workflow_version=data["workflow_version"],
+            work_item_type=data["work_item_type"],
+            template=data["template"],
+            schedule_kind=data["schedule_kind"],
+            schedule_expr=data["schedule_expr"],
+            timezone=data["timezone"],
+            start_at=datetime.fromisoformat(data["start_at"]),
+            end_at=datetime.fromisoformat(data["end_at"]) if data.get("end_at") else None,
+            count_remaining=data.get("count_remaining"),
+            status=data["status"],
+            catchup_policy=data["catchup_policy"],
+            last_fired_at=(
+                datetime.fromisoformat(data["last_fired_at"])
+                if data.get("last_fired_at")
+                else None
+            ),
+            next_fire_at=datetime.fromisoformat(data["next_fire_at"]),
+            created_by=data["created_by"],
+            created_at=datetime.fromisoformat(data["created_at"]),
+            updated_at=datetime.fromisoformat(data["updated_at"]),
+        )

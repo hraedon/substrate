@@ -64,7 +64,7 @@
 - Disk-level durability and backups (operator policy; separate concern)
 - Scheduling beyond `not_before` timestamp (no scheduler engine)
 - Retry / SLA / automation engines layered above coordination
-- Workflow file composition across files (`!include`, anchors across files) — deferred
+- Workflow file composition across files via `extends:` — **implemented (FR-29)**
 - Notification / paging / email (substrate flags + emits events; consumers are project policy)
 - A human-facing UI (federated UI is downstream and consumes the substrate; not part of this build)
 - Removal of registered workflow versions (registry is append-only)
@@ -208,6 +208,8 @@
 **Validation:**
 
 - FR-27: Custom field type validation at transition time. When a transition provides `custom_fields_update`, each field's value is validated against the work-item-type's field definition (same type vocabulary as FR-17: `string`, `integer`, `boolean`, `timestamp`, `json`, `enum`, `work_item_ref`). Unknown fields and type mismatches are rejected with `CUSTOM_FIELD_VIOLATION` before the transition proceeds. This extends creation-time validation (FR-02) to the update path.
+- **FR-28**: Recurring work-item generation (Plan 003). Register a recurrence rule that creates work-items on a schedule. Supports interval (`P1D`, `PT1H`) or RRULE schedules. Rules live in the new `recurrence_rules` table. Public API: `register_recurrence_rule`, `list_recurrence_rules`, `due_recurrences`, `fire_recurrence`, `update_recurrence_rule`, `cancel_recurrence_rule`.
+- **FR-29**: Workflow file composition (Plan 004). Workflows may declare `extends: <path>` to inherit from a base workflow file. Child overrides parent with deep-merge semantics, keyed list merge by `(name, from)` for transitions and `name` for states/roles/types, and `__append`/`__remove` modifiers. Cycle detection, max depth (8), and compose-root path escape protection. New error code `WORKFLOW_COMPOSE_ERROR`.
 
 ---
 
