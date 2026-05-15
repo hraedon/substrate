@@ -8,8 +8,17 @@ SUBSTRATE_VERSION = "0.1.0"
 
 
 def _parse_semver(s: str) -> tuple[int, int, int]:
-    parts = s.split("-", 1)[0].split("+", 1)[0].split(".")
-    return (int(parts[0]), int(parts[1]), int(parts[2]))
+    try:
+        core = s.split("-", 1)[0].split("+", 1)[0]
+        parts = core.split(".")
+        if len(parts) != 3:
+            raise ValueError(f"Expected 3 version components, got {len(parts)}")
+        return (int(parts[0]), int(parts[1]), int(parts[2]))
+    except (ValueError, IndexError) as e:
+        raise SubstrateError(
+            ErrorCode.WORKFLOW_VERSION_INCOMPATIBLE,
+            f"Invalid semantic version {s!r}: {e}",
+        ) from e
 
 
 def check_integrity(mgr: ConnectionManager) -> list[str]:
@@ -29,13 +38,7 @@ def check_integrity(mgr: ConnectionManager) -> list[str]:
         wf_ver = row["version"]
         wf_sub_str = row["substrate_version"]
 
-        try:
-            wf_sub = _parse_semver(wf_sub_str)
-        except Exception:
-            issues.append(
-                f"Workflow {wf_name!r} v{wf_ver}: invalid substrate_version {wf_sub_str!r}"
-            )
-            continue
+        wf_sub = _parse_semver(wf_sub_str)
 
         if lib_ver[0] != wf_sub[0]:
             issues.append(

@@ -98,6 +98,10 @@ class Metrics:
                 "substrate_escalations_total",
                 "Escalations",
             ),
+            "recurrence_fires_total": (
+                "substrate_recurrence_fires_total",
+                "Recurrence fires",
+            ),
         }
         if name in counters:
             metric_name, doc = counters[name]

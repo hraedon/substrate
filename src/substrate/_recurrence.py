@@ -232,7 +232,27 @@ def fire_recurrence(
         )
     now = _now()
     if rule["next_fire_at"] > now:
-        return rule, None
+        import psycopg.types.json as _pg_json
+        from psycopg.sql import SQL
+
+        evt_row = conn.execute(
+            SQL(
+                "SELECT work_item_id FROM events "
+                "WHERE transition = 'created' "
+                "AND actor_metadata @> %s "
+                "ORDER BY timestamp DESC LIMIT 1"
+            ),
+            [_pg_json.Jsonb({"recurrence_rule_id": str(rule_id)})],
+        ).fetchone()
+        existing_wi = None
+        if evt_row is not None:
+            wi_row = conn.execute(
+                SQL("SELECT * FROM work_items_current WHERE work_item_id = %s"),
+                [evt_row["work_item_id"]],
+            ).fetchone()
+            if wi_row is not None:
+                existing_wi = dict(wi_row)
+        return rule, existing_wi
 
     scheduled_fire_at = rule["next_fire_at"]
     next_fire = compute_next_fire(

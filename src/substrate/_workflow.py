@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
+from datetime import datetime
 from pathlib import Path
 
 import jsonschema
@@ -421,6 +422,14 @@ def _coerce_field(field_def: CustomFieldDef, value: object) -> object:
                 f"Field {field_def.name!r} expects ISO 8601 timestamp string",
                 detail={"field": field_def.name},
             )
+        try:
+            datetime.fromisoformat(value)
+        except ValueError:
+            raise SubstrateError(
+                ErrorCode.CUSTOM_FIELD_VIOLATION,
+                f"Field {field_def.name!r} contains invalid ISO 8601 timestamp: {value!r}",
+                detail={"field": field_def.name, "value": value},
+            )
     elif ftype == "json":
         if not isinstance(value, (dict, list, str, int, float, bool, type(None))):
             raise SubstrateError(
@@ -455,12 +464,16 @@ def _coerce_field(field_def: CustomFieldDef, value: object) -> object:
 
 
 def compute_content_hash(wf: WorkflowDefinition) -> bytes:
-    canonical_bytes = canonicalize(wf.to_dict())
+    d = wf.to_dict()
+    d.pop("raw_yaml", None)
+    canonical_bytes = canonicalize(d)
     return hashlib.sha256(canonical_bytes).digest()
 
 
 def compute_content_hash_from_dict(data: dict) -> bytes:
-    canonical_bytes = canonicalize(data)
+    d = dict(data)
+    d.pop("raw_yaml", None)
+    canonical_bytes = canonicalize(d)
     return hashlib.sha256(canonical_bytes).digest()
 
 

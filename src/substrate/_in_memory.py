@@ -286,7 +286,7 @@ class InMemorySubstrate:
     def register_workflow_file(self, path: str | Path) -> WorkflowVersion:
         return self.register_workflow(Path(path).read_text())
 
-    def get_workflow(self, workflow_name: str, version: int) -> "WorkflowDefinition":
+    def get_workflow(self, workflow_name: str, version: int) -> WorkflowDefinition:
         key = (workflow_name, version)
         wf_def = self._workflow_defs.get(key)
         if wf_def is None:
@@ -1155,7 +1155,6 @@ class InMemorySubstrate:
         wi = self._work_items.get(work_item_id)
         validate_work_item_exists(wi, work_item_id)
 
-        wi["not_before"] = not_before
         evt = _store_append(
             self._store,
             work_item_id=work_item_id,
@@ -1169,6 +1168,7 @@ class InMemorySubstrate:
             event_id=event_id,
             key_set=self._key_set,
         )
+        wi["not_before"] = not_before
         return evt
 
     def register_actor_role(self, actor_id: str, role: str) -> None:

@@ -98,6 +98,7 @@ class Substrate:
         *,
         pool_min: int = 1,
         pool_max: int = 10,
+        pool_max_lifetime: float | None = None,
         prometheus_registry=None,
     ) -> None:
         """Connect to an existing project.
@@ -108,6 +109,7 @@ class Substrate:
             hmac_key_path: Path to HMAC key-set JSON file (required).
             pool_min: Minimum connection-pool size.
             pool_max: Maximum connection-pool size.
+            pool_max_lifetime: Maximum connection lifetime in seconds.
             prometheus_registry: Optional ``prometheus_client.CollectorRegistry``.
 
         Raises:
@@ -119,7 +121,10 @@ class Substrate:
                 ErrorCode.UNKNOWN_KEY_ID,
                 "hmac_key_path is required",
             )
-        self._mgr = ConnectionManager(dsn, project, pool_min=pool_min, pool_max=pool_max)
+        self._mgr = ConnectionManager(
+            dsn, project, pool_min=pool_min, pool_max=pool_max,
+            pool_max_lifetime=pool_max_lifetime,
+        )
         try:
             self._mgr.open()
             self._mgr.ensure_schema()
@@ -155,6 +160,7 @@ class Substrate:
         *,
         pool_min: int = 1,
         pool_max: int = 10,
+        pool_max_lifetime: float | None = None,
         prometheus_registry=None,
     ) -> Substrate:
         """Create a new project: schema, migrations, and return a connected handle.
@@ -165,12 +171,16 @@ class Substrate:
             hmac_key_path: Path to HMAC key-set JSON file.
             pool_min: Minimum connection-pool size.
             pool_max: Maximum connection-pool size.
+            pool_max_lifetime: Maximum connection lifetime in seconds.
             prometheus_registry: Optional ``prometheus_client.CollectorRegistry``.
 
         Returns:
             A connected ``Substrate`` instance.
         """
-        mgr = ConnectionManager(dsn, project, pool_min=pool_min, pool_max=pool_max)
+        mgr = ConnectionManager(
+            dsn, project, pool_min=pool_min, pool_max=pool_max,
+            pool_max_lifetime=pool_max_lifetime,
+        )
         try:
             mgr.open()
             mgr.create_schema()
@@ -184,6 +194,7 @@ class Substrate:
             hmac_key_path,
             pool_min=pool_min,
             pool_max=pool_max,
+            pool_max_lifetime=pool_max_lifetime,
             prometheus_registry=prometheus_registry,
         )
 
@@ -1388,11 +1399,6 @@ class Substrate:
                 if existing is not None:
                     return existing
 
-                conn.execute(
-                    SQL("UPDATE work_items_current SET not_before = %s WHERE work_item_id = %s"),
-                    [not_before, work_item_id],
-                )
-
                 evt = _append_event(
                     conn,
                     work_item_id=work_item_id,
@@ -1406,6 +1412,11 @@ class Substrate:
                     payload=_Jsonb({"not_before": not_before.isoformat() if not_before else None}),
                     event_id=event_id,
                     _prelocked_wi=wi,
+                )
+
+                conn.execute(
+                    SQL("UPDATE work_items_current SET not_before = %s WHERE work_item_id = %s"),
+                    [not_before, work_item_id],
                 )
 
             self._metrics.inc("events_appended", self._project)

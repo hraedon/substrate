@@ -42,18 +42,22 @@ class ConnectionManager:
         project: str,
         pool_min: int = 1,
         pool_max: int = 10,
+        pool_max_lifetime: float | None = None,
     ) -> None:
         self._dsn = dsn
         self._schema = validate_project_name(project)
         self._project = project
-        self._pool = ConnectionPool(
-            dsn,
-            min_size=pool_min,
-            max_size=pool_max,
-            open=False,
-            configure=_configure_session,
-            kwargs={"row_factory": dict_row},
-        )
+        kwargs: dict = {"row_factory": dict_row}
+        pool_kwargs: dict = {
+            "min_size": pool_min,
+            "max_size": pool_max,
+            "open": False,
+            "configure": _configure_session,
+            "kwargs": kwargs,
+        }
+        if pool_max_lifetime is not None:
+            pool_kwargs["max_lifetime"] = pool_max_lifetime
+        self._pool = ConnectionPool(dsn, **pool_kwargs)
 
     @property
     def dsn(self) -> str:

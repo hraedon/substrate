@@ -16,6 +16,7 @@ import uuid
 from datetime import datetime
 
 import psycopg
+from psycopg.sql import SQL, Identifier
 
 from substrate import Substrate
 
@@ -26,26 +27,27 @@ PROJECT = "telemetry_example"
 
 
 def ensure_reporting_schema(dsn: str) -> None:
+    schema = Identifier(REPORTING_SCHEMA)
     with psycopg.connect(dsn) as conn:
-        conn.execute(f'CREATE SCHEMA IF NOT EXISTS "{REPORTING_SCHEMA}"')
+        conn.execute(SQL("CREATE SCHEMA IF NOT EXISTS {}").format(schema))
         conn.execute(
-            f"""
-            CREATE TABLE IF NOT EXISTS "{REPORTING_SCHEMA}".transitions_by_role (
-                id SERIAL PRIMARY KEY,
-                work_item_id UUID NOT NULL,
-                transition TEXT NOT NULL,
-                role TEXT,
-                model TEXT,
-                actor_id TEXT NOT NULL,
-                occurred_at TIMESTAMPTZ NOT NULL
-            )
-            """
+            SQL(
+                "CREATE TABLE IF NOT EXISTS {}.transitions_by_role ("
+                "id SERIAL PRIMARY KEY, "
+                "work_item_id UUID NOT NULL, "
+                "transition TEXT NOT NULL, "
+                "role TEXT, "
+                "model TEXT, "
+                "actor_id TEXT NOT NULL, "
+                "occurred_at TIMESTAMPTZ NOT NULL"
+                ")"
+            ).format(schema)
         )
         conn.execute(
-            f"""
-            CREATE INDEX IF NOT EXISTS idx_transitions_role_time
-            ON "{REPORTING_SCHEMA}".transitions_by_role (role, occurred_at)
-            """
+            SQL(
+                "CREATE INDEX IF NOT EXISTS idx_transitions_role_time "
+                "ON {}.transitions_by_role (role, occurred_at)"
+            ).format(schema)
         )
         conn.commit()
 
@@ -62,21 +64,23 @@ def record_transition(
     role = (actor_metadata or {}).get("role")
     model = (actor_metadata or {}).get("model")
 
+    schema = Identifier(REPORTING_SCHEMA)
     with psycopg.connect(DSN) as conn:
         conn.execute(
-            f"""
-            INSERT INTO "{REPORTING_SCHEMA}".transitions_by_role
-            (work_item_id, transition, role, model, actor_id, occurred_at)
-            VALUES (%s, %s, %s, %s, %s, %s)
-            """,
+            SQL(
+                "INSERT INTO {}.transitions_by_role "
+                "(work_item_id, transition, role, model, actor_id, occurred_at) "
+                "VALUES (%s, %s, %s, %s, %s, %s)"
+            ).format(schema),
             [work_item_id, transition, role, model, actor_id, timestamp],
         )
         conn.commit()
 
 
 def rebuild_analytics(sub: Substrate) -> None:
+    schema = Identifier(REPORTING_SCHEMA)
     with psycopg.connect(DSN) as conn:
-        conn.execute(f'TRUNCATE "{REPORTING_SCHEMA}".transitions_by_role')
+        conn.execute(SQL("TRUNCATE {}.transitions_by_role").format(schema))
         conn.commit()
 
     page = sub.read_events(limit=1000)

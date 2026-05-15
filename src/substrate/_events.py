@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import uuid
 from datetime import UTC, date, datetime
 
@@ -11,6 +12,11 @@ from ._errors import ErrorCode, SubstrateError
 from ._keys import KeySet
 from ._signing import sign_event
 from ._types import Event
+
+
+def _advisory_lock_id(event_id: uuid.UUID) -> int:
+    raw = event_id.bytes
+    return int.from_bytes(hashlib.sha256(raw).digest()[:8], "big") & 0x7FFFFFFFFFFFFFFF
 
 _EVENT_FIELDS = (
     "event_id, work_item_id, event_seq, actor_id, actor_kind, "
@@ -133,6 +139,7 @@ def append_event(
     )
 
     event_seq = next_seq
+    conn.execute(SQL("SELECT pg_advisory_xact_lock(%s)"), [_advisory_lock_id(event_id)])
     try:
         row = conn.execute(
             SQL(
@@ -160,6 +167,12 @@ def append_event(
             ],
         ).fetchone()
     except psycopg.errors.UniqueViolation:
+        existing = check_idempotency(
+            conn, event_id, actor_id=actor_id, transition=transition,
+            work_item_id=work_item_id,
+        )
+        if existing is not None:
+            return existing
         raise SubstrateError(
             ErrorCode.IDEMPOTENCY_COLLISION_WITH_DIFFERENT_PAYLOAD,
             f"event_id {event_id} already exists",
@@ -250,6 +263,7 @@ def append_transition_event(
     workflow_name = wi_row["workflow_name"]
     workflow_version = wi_row["workflow_version"]
 
+    conn.execute(SQL("SELECT pg_advisory_xact_lock(%s)"), [_advisory_lock_id(event_id)])
     try:
         row = conn.execute(
             SQL(
@@ -277,6 +291,12 @@ def append_transition_event(
             ],
         ).fetchone()
     except psycopg.errors.UniqueViolation:
+        existing = check_idempotency(
+            conn, event_id, actor_id=actor_id, transition=transition_name,
+            work_item_id=work_item_id,
+        )
+        if existing is not None:
+            return existing
         raise SubstrateError(
             ErrorCode.IDEMPOTENCY_COLLISION_WITH_DIFFERENT_PAYLOAD,
             f"event_id {event_id} already exists",
@@ -339,32 +359,58 @@ def read_events_by_work_item(
     before_seq: int | None = None,
     after_seq: int | None = None,
 ) -> list[Event]:
+    ts_row = conn.execute(
+        SQL(
+            "SELECT last_event_at FROM work_items_current WHERE work_item_id = %s"
+        ),
+        [work_item_id],
+    ).fetchone()
+    ts_upper = ts_row["last_event_at"] if ts_row else None
+
     if before_seq is not None:
+        clauses = ["work_item_id = %s", "event_seq < %s"]
+        params: list = [work_item_id, before_seq]
+        if ts_upper is not None:
+            clauses.append("timestamp <= %s")
+            params.append(ts_upper)
+        params.append(limit)
         rows = conn.execute(
             SQL(
                 f"SELECT {_EVENT_FIELDS} FROM events "
-                "WHERE work_item_id = %s AND event_seq < %s "
-                "ORDER BY event_seq DESC LIMIT %s"
+                "WHERE " + " AND ".join(clauses)
+                + " ORDER BY event_seq DESC LIMIT %s"
             ),
-            [work_item_id, before_seq, limit],
+            params,
         ).fetchall()
     elif after_seq is not None:
+        clauses = ["work_item_id = %s", "event_seq > %s"]
+        params = [work_item_id, after_seq]
+        if ts_upper is not None:
+            clauses.append("timestamp <= %s")
+            params.append(ts_upper)
+        params.append(limit)
         rows = conn.execute(
             SQL(
                 f"SELECT {_EVENT_FIELDS} FROM events "
-                "WHERE work_item_id = %s AND event_seq > %s "
-                "ORDER BY event_seq ASC LIMIT %s"
+                "WHERE " + " AND ".join(clauses)
+                + " ORDER BY event_seq ASC LIMIT %s"
             ),
-            [work_item_id, after_seq, limit],
+            params,
         ).fetchall()
     else:
+        clauses = ["work_item_id = %s"]
+        params = [work_item_id]
+        if ts_upper is not None:
+            clauses.append("timestamp <= %s")
+            params.append(ts_upper)
+        params.append(limit)
         rows = conn.execute(
             SQL(
                 f"SELECT {_EVENT_FIELDS} FROM events "
-                "WHERE work_item_id = %s "
-                "ORDER BY event_seq DESC LIMIT %s"
+                "WHERE " + " AND ".join(clauses)
+                + " ORDER BY event_seq DESC LIMIT %s"
             ),
-            [work_item_id, limit],
+            params,
         ).fetchall()
     if after_seq is not None:
         return [_row_to_event(r) for r in rows]

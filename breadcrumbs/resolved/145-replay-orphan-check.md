@@ -2,7 +2,8 @@
 number: "145"
 title: "Missing orphan-check in replay after dropping work_item_id FK"
 severity: medium
-status: proposed
+status: implemented
+resolution: "Added orphan detection in replay: pre-fetches all events grouped by work_item_id, detects events with no corresponding work_items_current row, halts on orphan events without a created transition, warns on orphans with a created event."
 kind: bug
 author: agent
 date: "2026-05-15"

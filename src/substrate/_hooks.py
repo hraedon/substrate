@@ -41,22 +41,27 @@ def run_validator(
     project: str | None = None,
 ) -> None:
     start = time.monotonic()
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(handler, ctx)
-        try:
-            future.result(timeout=timeout)
-        except FuturesTimeout:
-            raise SubstrateError(
-                ErrorCode.VALIDATOR_TIMEOUT,
-                f"Validator {validator_name!r} timed out after {timeout}s",
-            )
-        except SubstrateError:
-            raise
-        except Exception as e:
-            raise SubstrateError(
-                ErrorCode.VALIDATOR_FAILED,
-                f"Validator {validator_name!r} failed: {e}",
-            ) from e
+    executor = ThreadPoolExecutor(max_workers=1)
+    future = executor.submit(handler, ctx)
+    try:
+        future.result(timeout=timeout)
+    except FuturesTimeout:
+        executor.shutdown(wait=False, cancel_futures=True)
+        raise SubstrateError(
+            ErrorCode.VALIDATOR_TIMEOUT,
+            f"Validator {validator_name!r} timed out after {timeout}s",
+        )
+    except SubstrateError:
+        executor.shutdown(wait=False)
+        raise
+    except Exception as e:
+        executor.shutdown(wait=False)
+        raise SubstrateError(
+            ErrorCode.VALIDATOR_FAILED,
+            f"Validator {validator_name!r} failed: {e}",
+        ) from e
+
+    executor.shutdown(wait=True)
 
     elapsed = time.monotonic() - start
     near_threshold = timeout * 0.8
@@ -497,7 +502,7 @@ class HookConsumer:
                 conn = self._connect()
             except Exception as e:
                 reconnect_attempts += 1
-                if reconnect_attempts > max_reconnect_attempts:
+                if reconnect_attempts >= max_reconnect_attempts:
                     log.error(
                         "hooks.initial_connect_exhausted",
                         attempts=reconnect_attempts,
@@ -531,7 +536,7 @@ class HookConsumer:
                     if self._stop.is_set():
                         break
                     reconnect_attempts += 1
-                    if reconnect_attempts > max_reconnect_attempts:
+                    if reconnect_attempts >= max_reconnect_attempts:
                         log.error(
                             "hooks.reconnect_exhausted",
                             attempts=reconnect_attempts,
