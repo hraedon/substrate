@@ -102,6 +102,14 @@ class Metrics:
                 "substrate_recurrence_fires_total",
                 "Recurrence fires",
             ),
+            "recurrence_fires_skipped": (
+                "substrate_recurrence_fires_skipped_total",
+                "Recurrence fires skipped (catch-up policy)",
+            ),
+            "recurrence_rules_registered": (
+                "substrate_recurrence_rules_registered_total",
+                "Recurrence rules registered",
+            ),
         }
         if name in counters:
             metric_name, doc = counters[name]

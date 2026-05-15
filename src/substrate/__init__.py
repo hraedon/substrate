@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 
 import psycopg.types.json
@@ -1503,55 +1503,30 @@ class Substrate:
         catchup_policy: str = "fire_once",
         created_by: str = "system",
     ):
-        from ._recurrence import register_recurrence_rule as _register_rr
-
-        if start_at is None:
-            start_at = datetime.now(UTC)
-        with self._mgr.transaction() as conn:
-            rule = _register_rr(
-                conn,
-                rule_id=uuid.uuid4(),
-                workflow_name=workflow_name,
-                workflow_version=workflow_version,
-                work_item_type=work_item_type,
-                template=template,
-                schedule_kind=schedule_kind,
-                schedule_expr=schedule_expr,
-                timezone=timezone,
-                start_at=start_at,
-                end_at=end_at,
-                count=count,
-                catchup_policy=catchup_policy,
-                created_by=created_by,
-            )
-        return rule
+        from ._recurrence_api import register_recurrence_rule as _impl
+        return _impl(
+            self._mgr, self._metrics, self._project,
+            workflow_name, workflow_version, work_item_type, template,
+            schedule_kind, schedule_expr,
+            timezone=timezone, start_at=start_at, end_at=end_at,
+            count=count, catchup_policy=catchup_policy, created_by=created_by,
+        )
 
     def list_recurrence_rules(self, status: str | None = None) -> list:
-        from ._recurrence import list_recurrence_rules as _list_rr
-
-        with self._mgr.transaction() as conn:
-            return _list_rr(conn, status=status)
+        from ._recurrence_api import list_recurrence_rules as _impl
+        return _impl(self._mgr, status=status)
 
     def due_recurrences(self, now: datetime | None = None) -> list:
-        from ._recurrence import due_recurrences as _due
-
-        with self._mgr.transaction() as conn:
-            return _due(conn, now=now)
+        from ._recurrence_api import due_recurrences as _impl
+        return _impl(self._mgr, now=now)
 
     def fire_recurrence(self, rule_id: uuid.UUID) -> tuple[dict, dict]:
-        from ._recurrence import fire_recurrence as _fire
-
-        with self._mgr.transaction() as conn:
-            return _fire(
-                conn, rule_id, "system:scheduler", self._keys, self._metrics,
-                self._project,
-            )
+        from ._recurrence_api import fire_recurrence as _impl
+        return _impl(self._mgr, self._keys, self._metrics, self._project, rule_id)
 
     def cancel_recurrence_rule(self, rule_id: uuid.UUID) -> None:
-        from ._recurrence import cancel_recurrence_rule as _cancel
-
-        with self._mgr.transaction() as conn:
-            _cancel(conn, rule_id)
+        from ._recurrence_api import cancel_recurrence_rule as _impl
+        _impl(self._mgr, rule_id)
 
     def update_recurrence_rule(
         self,
@@ -1561,13 +1536,11 @@ class Substrate:
         schedule_expr: str | None = None,
         template: dict | None = None,
     ) -> dict:
-        from ._recurrence import update_recurrence_rule as _update
-
-        with self._mgr.transaction() as conn:
-            return _update(
-                conn, rule_id, status=status, schedule_expr=schedule_expr,
-                template=template,
-            )
+        from ._recurrence_api import update_recurrence_rule as _impl
+        return _impl(
+            self._mgr, rule_id,
+            status=status, schedule_expr=schedule_expr, template=template,
+        )
 
     @staticmethod
     def validate_actor_metadata(        event: Event,

@@ -71,7 +71,7 @@ def _parse_iso8601_duration(expr: str) -> timedelta:
         (?: T
             (?: (?P<hours> \d+ ) H )?
             (?: (?P<minutes> \d+ ) M )?
-            (?: (?P<seconds> \d+ ) S )?
+            (?: (?P<seconds> \d+(?:\.\d+)? ) S )?
         )?
     """
     m = re.fullmatch(pattern, expr, re.VERBOSE)
@@ -81,8 +81,11 @@ def _parse_iso8601_duration(expr: str) -> timedelta:
             f"Invalid ISO-8601 duration: {expr!r}",
         )
     groups = m.groupdict()
-    vals = {k: int(v) if v else 0 for k, v in groups.items()}
-    if all(v == 0 for v in vals.values()):
+    int_groups = {k: int(v) if v else 0
+                  for k, v in groups.items() if k != "seconds"}
+    seconds_val = groups.get("seconds")
+    int_groups["seconds"] = float(seconds_val) if seconds_val else 0
+    if all(v == 0 for v in int_groups.values()):
         raise SubstrateError(
             ErrorCode.RECURRENCE_SCHEDULE_INVALID,
             f"Invalid ISO-8601 duration: {expr!r}",
@@ -90,16 +93,39 @@ def _parse_iso8601_duration(expr: str) -> timedelta:
     from dateutil.relativedelta import relativedelta
 
     rd = relativedelta(
-        years=vals["years"],
-        months=vals["months"],
-        weeks=vals["weeks"],
-        days=vals["days"],
-        hours=vals["hours"],
-        minutes=vals["minutes"],
-        seconds=vals["seconds"],
+        years=int_groups["years"],
+        months=int_groups["months"],
+        weeks=int_groups["weeks"],
+        days=int_groups["days"],
+        hours=int_groups["hours"],
+        minutes=int_groups["minutes"],
+        seconds=int_groups["seconds"],
     )
     base = datetime(1970, 1, 1, tzinfo=UTC)
     return (base + rd) - base
+
+
+def _find_next_future_slot(
+    schedule_kind: str,
+    schedule_expr: str,
+    timezone: str,
+    start_at: datetime,
+    after_slot: datetime,
+    now: datetime,
+    end_at: datetime | None,
+) -> datetime | None:
+    candidate = after_slot
+    max_iterations = 10000
+    for _ in range(max_iterations):
+        next_candidate = compute_next_fire(
+            schedule_kind, schedule_expr, timezone, start_at, candidate, end_at,
+        )
+        if next_candidate is None:
+            return None
+        if next_candidate > now:
+            return next_candidate
+        candidate = next_candidate
+    return candidate
 
 
 def validate_template(template: dict) -> None:
@@ -231,7 +257,10 @@ def fire_recurrence(
             f"Recurrence rule {rule_id} is {rule['status']!r}",
         )
     now = _now()
-    if rule["next_fire_at"] > now:
+    scheduled_fire_at = rule["next_fire_at"]
+    catchup = rule.get("catchup_policy", "fire_once")
+
+    if scheduled_fire_at > now:
         import psycopg.types.json as _pg_json
         from psycopg.sql import SQL
 
@@ -254,7 +283,37 @@ def fire_recurrence(
                 existing_wi = dict(wi_row)
         return rule, existing_wi
 
-    scheduled_fire_at = rule["next_fire_at"]
+    if catchup == "skip":
+        future_fire = _find_next_future_slot(
+            rule["schedule_kind"],
+            rule["schedule_expr"],
+            rule["timezone"],
+            rule["start_at"],
+            scheduled_fire_at,
+            now,
+            rule["end_at"],
+        )
+        if future_fire is None:
+            conn.execute(
+                SQL(
+                    "UPDATE recurrence_rules SET status = 'exhausted', "
+                    "next_fire_at = %s, updated_at = now() WHERE rule_id = %s"
+                ),
+                [now + timedelta(days=36500), rule_id],
+            )
+            rule["status"] = "exhausted"
+        else:
+            conn.execute(
+                SQL(
+                    "UPDATE recurrence_rules SET next_fire_at = %s, updated_at = now() "
+                    "WHERE rule_id = %s"
+                ),
+                [future_fire, rule_id],
+            )
+            rule["next_fire_at"] = future_fire
+        metrics.inc("recurrence_fires_skipped", project)
+        return rule, None
+
     next_fire = compute_next_fire(
         rule["schedule_kind"],
         rule["schedule_expr"],
@@ -263,6 +322,19 @@ def fire_recurrence(
         scheduled_fire_at,
         rule["end_at"],
     )
+
+    if catchup == "fire_once" and next_fire is not None and next_fire <= now:
+        future_fire = _find_next_future_slot(
+            rule["schedule_kind"],
+            rule["schedule_expr"],
+            rule["timezone"],
+            rule["start_at"],
+            next_fire,
+            now,
+            rule["end_at"],
+        )
+        next_fire = future_fire
+
     new_count = rule["count_remaining"]
     if new_count is not None:
         new_count -= 1
@@ -270,10 +342,7 @@ def fire_recurrence(
             new_count = None
 
     if next_fire is None:
-        if new_count is not None and new_count <= 0:
-            new_status = "exhausted"
-        else:
-            new_status = "exhausted"
+        new_status = "exhausted"
     else:
         if new_count is not None and new_count <= 0:
             new_status = "exhausted"

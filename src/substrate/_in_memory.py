@@ -296,7 +296,7 @@ class InMemorySubstrate:
             )
         return wf_def
 
-    def create_work_item(
+    def _create_work_item(
         self,
         workflow_name: str,
         work_item_type: str,
@@ -307,14 +307,19 @@ class InMemorySubstrate:
         custom_fields: dict | None = None,
         not_before: datetime | None = None,
         event_id: uuid.UUID | None = None,
+        skip_event_id_version_check: bool = False,
     ) -> tuple[WorkItem, Event]:
         if event_id is None:
             event_id = uuid.uuid4()
-        validate_mutation_params(
-            actor_kind=actor_kind,
-            event_id=event_id,
-            not_before=not_before,
-        )
+        if not skip_event_id_version_check:
+            validate_mutation_params(
+                actor_kind=actor_kind,
+                event_id=event_id,
+                not_before=not_before,
+            )
+        else:
+            from ._contract import validate_actor_kind
+            validate_actor_kind(actor_kind)
 
         wf_data, wf, version = self._resolve_wf_def(workflow_name)
 
@@ -378,6 +383,29 @@ class InMemorySubstrate:
             raise
 
         return self._wi_to_work_item(wi_state), evt
+
+    def create_work_item(
+        self,
+        workflow_name: str,
+        work_item_type: str,
+        actor_id: str,
+        actor_kind: str = "agent",
+        actor_metadata: dict | None = None,
+        *,
+        custom_fields: dict | None = None,
+        not_before: datetime | None = None,
+        event_id: uuid.UUID | None = None,
+    ) -> tuple[WorkItem, Event]:
+        return self._create_work_item(
+            workflow_name,
+            work_item_type,
+            actor_id,
+            actor_kind,
+            actor_metadata,
+            custom_fields=custom_fields,
+            not_before=not_before,
+            event_id=event_id,
+        )
 
     def append_event(
         self,
@@ -1219,17 +1247,15 @@ class InMemorySubstrate:
                 ErrorCode.WORKFLOW_NOT_REGISTERED,
                 f"Workflow {workflow_name!r} v{workflow_version} not registered",
             )
-        existing = None
-        for r in self._recurrence_rules.values():
-            if (
-                r["workflow_name"], r["workflow_version"], r["work_item_type"]
-            ) == (workflow_name, workflow_version, work_item_type):
-                if r["status"] == "active":
-                    existing = r
-                    break
-        if existing is not None:
-            return existing
+        from ._recurrence import compute_next_fire, validate_schedule, validate_template
+        validate_schedule(schedule_kind, schedule_expr)
+        validate_template(template)
         rule_id = uuid.uuid4()
+        next_fire = compute_next_fire(
+            schedule_kind, schedule_expr, timezone, start_at, None, end_at,
+        )
+        if next_fire is None:
+            next_fire = start_at
         rule = {
             "rule_id": rule_id,
             "workflow_name": workflow_name,
@@ -1245,7 +1271,7 @@ class InMemorySubstrate:
             "status": "active",
             "catchup_policy": catchup_policy,
             "last_fired_at": None,
-            "next_fire_at": start_at,
+            "next_fire_at": next_fire,
             "created_by": created_by,
             "created_at": datetime.now(UTC),
             "updated_at": datetime.now(UTC),
@@ -1270,7 +1296,7 @@ class InMemorySubstrate:
         return sorted(result, key=lambda r: r["next_fire_at"])
 
     def fire_recurrence(self, rule_id: uuid.UUID) -> tuple[dict, dict]:
-        from ._recurrence import compute_next_fire
+        from ._recurrence import _find_next_future_slot, compute_next_fire
         rule = self._recurrence_rules.get(rule_id)
         if rule is None:
             raise SubstrateError(
@@ -1283,9 +1309,30 @@ class InMemorySubstrate:
                 f"Recurrence rule {rule_id} is {rule['status']!r}",
             )
         now = datetime.now(UTC)
-        if rule["next_fire_at"] > now:
-            return rule, None
         scheduled_fire_at = rule["next_fire_at"]
+        catchup = rule.get("catchup_policy", "fire_once")
+
+        if scheduled_fire_at > now:
+            return rule, None
+
+        if catchup == "skip":
+            future_fire = _find_next_future_slot(
+                rule["schedule_kind"],
+                rule["schedule_expr"],
+                rule["timezone"],
+                rule["start_at"],
+                scheduled_fire_at,
+                now,
+                rule["end_at"],
+            )
+            if future_fire is None:
+                rule["status"] = "exhausted"
+                rule["next_fire_at"] = now + timedelta(days=36500)
+            else:
+                rule["next_fire_at"] = future_fire
+            rule["updated_at"] = now
+            return rule, None
+
         next_fire = compute_next_fire(
             rule["schedule_kind"],
             rule["schedule_expr"],
@@ -1294,6 +1341,19 @@ class InMemorySubstrate:
             scheduled_fire_at,
             rule["end_at"],
         )
+
+        if catchup == "fire_once" and next_fire is not None and next_fire <= now:
+            future_fire = _find_next_future_slot(
+                rule["schedule_kind"],
+                rule["schedule_expr"],
+                rule["timezone"],
+                rule["start_at"],
+                next_fire,
+                now,
+                rule["end_at"],
+            )
+            next_fire = future_fire
+
         template = rule["template"]
         not_before_offset = template.get("not_before_offset_seconds", 0)
         not_before = (
@@ -1303,7 +1363,7 @@ class InMemorySubstrate:
         )
         custom_fields = template.get("custom_fields", {})
         event_id = uuid.uuid5(rule_id, scheduled_fire_at.isoformat())
-        wi, _evt = self.create_work_item(
+        wi, _evt = self._create_work_item(
             workflow_name=rule["workflow_name"],
             work_item_type=rule["work_item_type"],
             actor_id="system:scheduler",
@@ -1315,6 +1375,7 @@ class InMemorySubstrate:
             custom_fields=custom_fields,
             not_before=not_before,
             event_id=event_id,
+            skip_event_id_version_check=True,
         )
         new_count = rule["count_remaining"]
         if new_count is not None:
