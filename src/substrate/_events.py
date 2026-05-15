@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import UTC, date, datetime
 
 import psycopg
-from psycopg.sql import SQL
+from psycopg.sql import SQL, Identifier
 
 from ._contract import Jsonb
 from ._errors import ErrorCode, SubstrateError
@@ -469,3 +469,37 @@ def read_events_composite(
     if work_item_id is not None:
         return [_row_to_event(r) for r in reversed(rows)]
     return [_row_to_event(r) for r in rows]
+
+
+def ensure_event_partitions(conn: psycopg.Connection, months_ahead: int = 3) -> list[str]:
+    from psycopg.sql import Literal as SqlLiteral
+
+    today = datetime.now(UTC).date()
+    year = today.year
+    month = today.month
+
+    created = []
+    for _ in range(months_ahead + 1):
+        start = date(year, month, 1)
+        if month == 12:
+            end = date(year + 1, 1, 1)
+        else:
+            end = date(year, month + 1, 1)
+        partition_name = f"events_y{year:04d}_m{month:02d}"
+        conn.execute(
+            SQL(
+                "CREATE TABLE IF NOT EXISTS {} PARTITION OF events "
+                "FOR VALUES FROM ({}) TO ({})"
+            ).format(
+                Identifier(partition_name),
+                SqlLiteral(start.isoformat()),
+                SqlLiteral(end.isoformat()),
+            ),
+        )
+        created.append(partition_name)
+        if month == 12:
+            year += 1
+            month = 1
+        else:
+            month += 1
+    return created

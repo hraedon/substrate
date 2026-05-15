@@ -97,6 +97,7 @@ sub.acquire_claim(work_item_id, actor_id, ttl_seconds=300)
 sub.heartbeat_claim(work_item_id, actor_id, ttl_seconds, *, expected_attempt_number=...)
 sub.release_claim(work_item_id, actor_id)
 sub.sweep_expired_claims()
+sub.ensure_event_partitions(months_ahead=3)  # idempotent; call on a timer to keep ahead of `events_default`
 sub.query_work_items(workflow_name=..., current_states=[...], claimable_now=True, custom_field_filters={...})
 sub.read_events(work_item_id=...)
 sub.create_link(from_id, to_id, link_type, actor_id, payload=...)
@@ -111,6 +112,10 @@ sub.register_hook_handler(event_type, fn)          # async dispatch via hook_que
 sub.start_hook_consumer()                          # background thread: LISTEN + 30s poll
 sub.stop_hook_consumer()
 sub.poll_hooks()                                   # manual drain (in lieu of consumer thread)
+sub.claim_hooks(max_batch, lease_seconds)          # lease a batch for out-of-process processing
+sub.complete_hook(hook_queue_id)                   # ack success on a leased hook
+sub.fail_hook(hook_queue_id, error)                # ack failure; requeues or dead-letters per max_retries
+sub.sweep_expired_hook_leases()                    # requeue rows past their lease deadline
 sub.list_dead_lettered_hooks()
 sub.requeue_dead_lettered_hook(hook_id)
 sub.validate_actor_metadata(metadata, schema=None)  # lint helper (FR-18)
@@ -142,10 +147,11 @@ validate_yaml(yaml_string_or_path)                     # -> ValidationResult
 ## Known constraints
 
 - **Schema-per-project requires session-scoped `search_path`.** Substrate uses `SET LOCAL search_path` per transaction. This is incompatible with connection-pooling middleware that dispatches transactions across different backends (e.g., PgBouncer in transaction mode). Use PgBouncer in session mode, or connect directly to Postgres. Medium-term migration path: fully-qualified table names (BC-033).
+- **`events` is partitioned by month on `timestamp` (migration 010).** Host process must call `sub.ensure_event_partitions()` on a timer (alongside `sweep_expired_claims`) or new months land in `events_default`. The `hook_queue.event_id → events.event_id` FK was dropped (partitioned tables cannot maintain it without including the partition key); a replay-time orphan check is tracked in BC-145. The partial unique index `idx_events_one_escalated` is enforced per-partition; cross-partition uniqueness for `(work_item_id, event_seq)` relies on seq allocation under the canonical row lock and is asserted at the application layer.
 
 ## Status
 
-MVP + Phase 2 + Phase 3 implemented. Production readiness sweep complete. All FRs FR-01 through FR-27 are in tree. 300 tests + 3 scale benchmarks passing across 18 files. All breadcrumbs resolved.
+MVP + Phase 2 + Phase 3 implemented. Production readiness sweep complete. All FRs FR-01 through FR-27 are in tree. 432 tests + 4 scale benchmarks passing. Plans for pull-forward work live in `plans/` (events partitioning and hook-queue decomposition landed; admin CLI, recurring work-items, workflow composition, HTTP sidecar still pending).
 
 Production readiness additions: migration packaging for pip installs (importlib.resources + force-include), claims_stolen metric wired, actor_kind validation at API boundary, docstrings on all public methods, spec.yaml synced to v4, structured replay error handling.
 

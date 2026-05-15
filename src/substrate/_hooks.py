@@ -109,6 +109,126 @@ def enqueue_hooks(
         )
 
 
+def claim_hooks(
+    conn: psycopg.Connection,
+    max_batch: int = 10,
+    lease_seconds: int = 60,
+) -> list[HookContext]:
+    rows = conn.execute(
+        SQL(
+            "SELECT id, event_id, hook_name, payload, retry_count, max_retries "
+            "FROM hook_queue "
+            "WHERE status = 'pending' "
+            "AND (next_retry_at IS NULL OR next_retry_at <= now()) "
+            "ORDER BY id LIMIT %s "
+            "FOR UPDATE SKIP LOCKED"
+        ),
+        [max_batch],
+    ).fetchall()
+
+    if not rows:
+        return []
+
+    ids = [r["id"] for r in rows]
+    lease_expires_at = datetime.now(UTC) + timedelta(seconds=lease_seconds)
+    conn.execute(
+        SQL(
+            "UPDATE hook_queue SET status = 'in_progress', "
+            "lease_expires_at = %s, updated_at = now() "
+            "WHERE id = ANY(%s)"
+        ),
+        [lease_expires_at, ids],
+    )
+
+    result = []
+    for row in rows:
+        payload = row["payload"] or {}
+        raw_wi_id = payload.get("work_item_id")
+        if raw_wi_id is None:
+            continue
+        result.append(HookContext(
+            hook_queue_id=row["id"],
+            event_id=row["event_id"],
+            work_item_id=uuid.UUID(raw_wi_id),
+            hook_name=row["hook_name"],
+            transition=payload.get("transition"),
+            payload=payload.get("event_payload"),
+        ))
+    return result
+
+
+def complete_hook(conn: psycopg.Connection, hook_queue_id: int) -> None:
+    result = conn.execute(
+        SQL(
+            "UPDATE hook_queue SET status = 'completed', "
+            "lease_expires_at = NULL, updated_at = now() "
+            "WHERE id = %s"
+        ),
+        [hook_queue_id],
+    )
+    if result.rowcount == 0:
+        raise SubstrateError(
+            ErrorCode.HOOK_NOT_FOUND,
+            f"Hook {hook_queue_id} not found",
+        )
+
+
+def fail_hook(
+    conn: psycopg.Connection,
+    hook_queue_id: int,
+    error: str,
+    key_set: KeySet,
+    metrics: Metrics | None = None,
+    project: str | None = None,
+) -> None:
+    row = conn.execute(
+        SQL(
+            "SELECT id, event_id, hook_name, hook_type, payload, retry_count, max_retries "
+            "FROM hook_queue WHERE id = %s"
+        ),
+        [hook_queue_id],
+    ).fetchone()
+
+    if row is None:
+        raise SubstrateError(
+            ErrorCode.HOOK_NOT_FOUND,
+            f"Hook {hook_queue_id} not found",
+        )
+
+    retry_count = row["retry_count"] + 1
+    max_retries = row["max_retries"]
+
+    if retry_count >= max_retries:
+        _move_to_dead_letter(conn, row, error, key_set)
+        if metrics and project:
+            metrics.inc("hooks_dead_lettered", project)
+    else:
+        backoff = timedelta(seconds=min(2 ** retry_count, 60))
+        next_retry = datetime.now(UTC) + backoff
+        conn.execute(
+            SQL(
+                "UPDATE hook_queue SET status = 'pending', retry_count = %s, "
+                "next_retry_at = %s, lease_expires_at = NULL, updated_at = now() "
+                "WHERE id = %s"
+            ),
+            [retry_count, next_retry, hook_queue_id],
+        )
+        if metrics and project:
+            metrics.inc("hooks_failed", project)
+    log.warning("hooks.handler_failed", hook_queue_id=hook_queue_id, error=error)
+
+
+def sweep_expired_hook_leases(conn: psycopg.Connection) -> int:
+    result = conn.execute(
+        SQL(
+            "UPDATE hook_queue SET status = 'pending', "
+            "lease_expires_at = NULL, updated_at = now() "
+            "WHERE status = 'in_progress' AND lease_expires_at < now()"
+        ),
+    )
+    return result.rowcount
+
+
 def poll_and_process_hooks(
     conn: psycopg.Connection,
     handlers: dict,
@@ -116,102 +236,54 @@ def poll_and_process_hooks(
     metrics: Metrics | None,
     project: str,
 ) -> int:
-    """Reset stuck hooks, then process pending ones.
+    sweep_expired_hook_leases(conn)
 
-    **Stuck-hook recovery (BC-047):** entries older than 5 minutes in
-    ``in_progress`` are reset to ``pending`` and re-dispatched.  If a
-    handler is genuinely still running (slow, not stuck) it may execute
-    twice.  The nested savepoint in the dispatch loop prevents
-    corruption, but the handler's external side effects are the
-    consumer's responsibility to make idempotent.  A fully-correct fix
-    would require per-hook advisory locks or PID-based liveness checks.
-    """
-    conn.execute(
-        SQL(
-            "UPDATE hook_queue SET status = 'pending', updated_at = now() "
-            "WHERE status = 'in_progress' AND updated_at < now() - interval '5 minutes'"
-        ),
-    )
-
-    rows = conn.execute(
-        SQL(
-            "SELECT id, event_id, hook_name, payload, retry_count, max_retries "
-            "FROM hook_queue "
-            "WHERE status = 'pending' "
-            "AND (next_retry_at IS NULL OR next_retry_at <= now()) "
-            "ORDER BY id LIMIT 100 "
-            "FOR UPDATE SKIP LOCKED"
-        ),
-    ).fetchall()
+    contexts = claim_hooks(conn, max_batch=100, lease_seconds=300)
 
     processed = 0
-    for row in rows:
-        hook_id = row["id"]
-        hook_name = row["hook_name"]
+    for ctx in contexts:
+        hook_name = ctx.hook_name
         handler = handlers.get(hook_name)
 
         if handler is None:
             log.warning("hooks.handler_not_registered", hook_name=hook_name)
-            _move_to_dead_letter(conn, row, f"Handler {hook_name!r} not registered", key_set)
+            row = conn.execute(
+                SQL(
+                    "SELECT id, event_id, hook_name, hook_type, payload, "
+                    "retry_count, max_retries FROM hook_queue WHERE id = %s"
+                ),
+                [ctx.hook_queue_id],
+            ).fetchone()
+            if row is not None:
+                _move_to_dead_letter(conn, row, f"Handler {hook_name!r} not registered", key_set)
             if metrics:
                 metrics.inc("hooks_dead_lettered", project)
             continue
 
-        payload = row["payload"] or {}
-        raw_wi_id = payload.get("work_item_id")
-        if raw_wi_id is None:
-            log.error("hooks.missing_work_item_id", hook_id=hook_id, hook_name=hook_name)
-            _move_to_dead_letter(conn, row, "work_item_id missing from payload", key_set)
+        if ctx.work_item_id is None:
+            log.error("hooks.missing_work_item_id", hook_id=ctx.hook_queue_id, hook_name=hook_name)
+            row = conn.execute(
+                SQL(
+                    "SELECT id, event_id, hook_name, hook_type, payload, "
+                    "retry_count, max_retries FROM hook_queue WHERE id = %s"
+                ),
+                [ctx.hook_queue_id],
+            ).fetchone()
+            if row is not None:
+                _move_to_dead_letter(conn, row, "work_item_id missing from payload", key_set)
             if metrics:
                 metrics.inc("hooks_dead_lettered", project)
             continue
-        ctx = HookContext(
-            hook_queue_id=hook_id,
-            event_id=row["event_id"],
-            work_item_id=uuid.UUID(raw_wi_id),
-            hook_name=hook_name,
-            transition=payload.get("transition"),
-            payload=payload.get("event_payload"),
-        )
-
-        conn.execute(
-            SQL("UPDATE hook_queue SET status = 'in_progress', updated_at = now() WHERE id = %s"),
-            [hook_id],
-        )
 
         try:
             with conn.transaction():
                 handler(ctx)
-                conn.execute(
-                    SQL(
-                        "UPDATE hook_queue SET status = 'completed', updated_at = now() "
-                        "WHERE id = %s"
-                    ),
-                    [hook_id],
-                )
+                complete_hook(conn, ctx.hook_queue_id)
                 if metrics:
                     metrics.inc("hooks_succeeded", project)
             processed += 1
         except Exception as e:
-            retry_count = row["retry_count"] + 1
-            max_retries = row["max_retries"]
-
-            if retry_count >= max_retries:
-                _move_to_dead_letter(conn, row, str(e), key_set)
-                if metrics:
-                    metrics.inc("hooks_dead_lettered", project)
-            else:
-                backoff = timedelta(seconds=min(2 ** retry_count, 60))
-                next_retry = datetime.now(UTC) + backoff
-                conn.execute(
-                    SQL(
-                        "UPDATE hook_queue SET status = 'pending', retry_count = %s, "
-                        "next_retry_at = %s, updated_at = now() WHERE id = %s"
-                    ),
-                    [retry_count, next_retry, hook_id],
-                )
-                if metrics:
-                    metrics.inc("hooks_failed", project)
+            fail_hook(conn, ctx.hook_queue_id, str(e), key_set, metrics, project)
             log.warning("hooks.handler_failed", hook_name=hook_name, error=str(e))
 
     return processed

@@ -273,6 +273,98 @@ class Substrate:
                 conn, self._hook_handlers, self._keys, self._metrics, self._project,
             )
 
+    def ensure_event_partitions(self, months_ahead: int = 3) -> list[str]:
+        """Idempotently pre-create monthly event partitions.
+
+        Creates partitions for the current month and ``months_ahead``
+        additional months. Safe to call repeatedly; existing partitions are
+        skipped. Call this on the same cadence as ``sweep_expired_claims``
+        (e.g. daily or hourly) to ensure there is always a covering partition.
+
+        Args:
+            months_ahead: Number of future months to pre-create beyond the
+                current month (default 3).
+
+        Returns:
+            List of partition table names that were processed (including
+            already-existing ones).
+        """
+        from ._events import ensure_event_partitions as _ensure
+
+        with self._mgr.transaction() as conn:
+            return _ensure(conn, months_ahead)
+
+    def claim_hooks(
+        self,
+        max_batch: int = 10,
+        lease_seconds: int = 60,
+    ) -> list[HookContext]:
+        """Claim a batch of pending hooks for external processing.
+
+        Marks claimed rows ``in_progress`` and sets ``lease_expires_at``.
+        If the caller crashes without completing or failing the hook, the
+        lease expires and ``sweep_expired_hook_leases`` requeues the row.
+
+        Args:
+            max_batch: Maximum number of hooks to claim (default 10).
+            lease_seconds: Lease duration in seconds (default 60).
+
+        Returns:
+            List of ``HookContext`` objects describing each claimed hook.
+        """
+        from ._hooks import claim_hooks as _claim
+
+        with self._mgr.transaction() as conn:
+            return _claim(conn, max_batch, lease_seconds)
+
+    def complete_hook(self, hook_queue_id: int) -> None:
+        """Mark a previously claimed hook as successfully completed.
+
+        Args:
+            hook_queue_id: The ``hook_queue_id`` from ``claim_hooks``.
+
+        Raises:
+            SubstrateError: ``HOOK_NOT_FOUND`` if the row does not exist.
+        """
+        from ._hooks import complete_hook as _complete
+
+        with self._mgr.transaction() as conn:
+            _complete(conn, hook_queue_id)
+
+    def fail_hook(self, hook_queue_id: int, error: str) -> None:
+        """Record a hook processing failure.
+
+        Increments ``retry_count``. If below ``max_retries``, requeues the
+        hook to ``pending`` with exponential backoff. If exhausted, moves the
+        row to ``hook_dead_letter`` and emits a ``hook_dead_lettered`` event.
+
+        Args:
+            hook_queue_id: The ``hook_queue_id`` from ``claim_hooks``.
+            error: Human-readable error description.
+
+        Raises:
+            SubstrateError: ``HOOK_NOT_FOUND`` if the row does not exist.
+        """
+        from ._hooks import fail_hook as _fail
+
+        with self._mgr.transaction() as conn:
+            _fail(conn, hook_queue_id, error, self._keys, self._metrics, self._project)
+
+    def sweep_expired_hook_leases(self) -> int:
+        """Requeue in-progress hooks whose leases have expired.
+
+        A hook lease expires when ``lease_expires_at < now()``. Requeued
+        rows return to ``pending`` status with their retry count unchanged;
+        a lease expiry is not counted as a failure.
+
+        Returns:
+            Number of hooks requeued.
+        """
+        from ._hooks import sweep_expired_hook_leases as _sweep
+
+        with self._mgr.transaction() as conn:
+            return _sweep(conn)
+
     def register_workflow(
         self,
         yaml_content: str,
