@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
+from typing import ClassVar
 
 import pytest
 
 from substrate._contract import (
-    ClaimAcquireResult,
     check_actor_role_authorized,
     check_append_blocked,
     check_expected_seq,
@@ -45,7 +45,7 @@ def _make_event(
         key_id="key-1",
         workflow_name="wf",
         workflow_version=1,
-        timestamp=datetime.now(timezone.utc),
+        timestamp=datetime.now(UTC),
         transition=transition,
         payload=None,
         payload_canonical_hash=b"",
@@ -53,7 +53,7 @@ def _make_event(
     )
 
 
-NOW = datetime.now(timezone.utc)
+NOW = datetime.now(UTC)
 
 
 class TestValidateActorKind:
@@ -110,7 +110,7 @@ class TestValidateNotBefore:
 
 
 class TestResolveTransition:
-    TRANSITIONS = [
+    TRANSITIONS: ClassVar[list[dict]] = [
         {"name": "approve", "from_state": "pending", "to_state": "approved"},
         {"name": "reject", "from_state": "pending", "to_state": "rejected"},
         {"name": "approve", "from_state": "review", "to_state": "approved"},
@@ -180,7 +180,7 @@ class TestCheckActorRoleAuthorized:
 
 
 class TestCheckAppendBlocked:
-    TRANSITIONS = [
+    TRANSITIONS: ClassVar[list[dict]] = [
         {"name": "approve", "from_state": "pending", "to_state": "approved"},
     ]
 
@@ -260,7 +260,7 @@ class TestCheckExpectedSeq:
 
 
 class TestValidateLinkType:
-    LINK_TYPES = [
+    LINK_TYPES: ClassVar[list[dict]] = [
         {"name": "depends_on", "source_type": "task", "target_type": "task"},
         {"name": "blocks", "source_type": "task", "target_type": "task"},
     ]

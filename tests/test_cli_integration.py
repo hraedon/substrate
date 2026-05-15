@@ -39,8 +39,8 @@ def _run(*args, env=None):
 def _extract_json(stdout):
     lines = stdout.strip().split("\n")
     filtered = "\n".join(
-        l for l in lines
-        if not re.match(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", l)
+        line for line in lines
+        if not re.match(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", line)
     )
     return json.loads(filtered)
 
@@ -172,8 +172,8 @@ class TestWorkItemList:
         project, _ = populated_project
         result = _run(*_project_args(project), "work-item", "list", "--state", "completed")
         assert result.returncode == 0
-        lines = [l for l in result.stdout.strip().split("\n")
-                 if l and not l.startswith("--") and not l.startswith("202")]
+        lines = [line for line in result.stdout.strip().split("\n")
+                 if line and not line.startswith("--") and not line.startswith("202")]
         assert len(lines) == 0
 
 

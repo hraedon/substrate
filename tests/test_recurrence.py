@@ -8,8 +8,8 @@ import pytest
 
 from substrate._errors import ErrorCode, SubstrateError
 from substrate._recurrence import (
-    compute_next_fire,
     _parse_iso8601_duration,
+    compute_next_fire,
     validate_schedule,
     validate_template,
 )

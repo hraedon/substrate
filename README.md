@@ -1,12 +1,28 @@
 # substrate
 
-Coordination + state plane for agent pipelines over Postgres.
+Coordination and durable state for agent pipelines over Postgres.
 
-[![Tests](https://img.shields.io/badge/tests-293%20passing-brightgreen)]()
+[![CI](https://github.com/anomalyco/substrate/actions/workflows/ci.yml/badge.svg)](https://github.com/anomalyco/substrate/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/tests-528%20passing-brightgreen)]()
 [![License](https://img.shields.io/badge/license-MIT-blue)]()
-[![Status](https://img.shields.io/badge/status-MVP%20%2B%20Phase%202%20%2B%20Phase%203%20complete-brightgreen)]()
 
 Substrate is a Python library that provides durable claims, event-sourced state, validated state transitions, and typed links for multi-role agent pipelines. Each project deploys substrate as its own isolated instance using schema-per-project isolation within a single Postgres database.
+
+## Features
+
+- **Event-sourced state** — immutable append-only event log; projection rebuilt by replay
+- **Durable claims** — lease-based work claiming with TTL, auto-steal, and attempt tracking
+- **Validated transitions** — workflow-defined state machines with role gating and sync validators
+- **Typed links** — directed relationships between work items with link types declared in workflow YAML
+- **Hook queue** — async event dispatch with dead-letter, retry, and out-of-process claim/complete/fail lifecycle
+- **Custom fields** — typed fields with JSON Schema validation, enum support, and JSONB containment queries
+- **Recurring work items** — interval and RRULE schedules with catch-up policies
+- **Workflow composition** — `extends:` inheritance with keyed list merge and `__append`/`__remove` modifiers
+- **HMAC-SHA256 signing** — RFC 8785 canonicalization; library is sole signer
+- **HTTP sidecar** — optional FastAPI pass-through for non-Python consumers with bearer-token auth
+- **Admin CLI** — `substrate` command for workflow validation, work-item inspection, replay, and recurrence management
+- **Prometheus metrics** — built-in counters for claims, transitions, events, hooks, escalations
+- **In-memory backend** — full conformance backend for testing without Postgres
 
 ## Quick Start
 
@@ -14,11 +30,17 @@ Substrate is a Python library that provides durable claims, event-sourced state,
 # Install
 pip install -e .
 
+# With HTTP sidecar support
+pip install -e ".[sidecar]"
+
 # Start test Postgres
 docker compose -f docker-compose.test.yml up -d
 
 # Run tests
 pytest tests/ -v
+
+# Lint
+ruff check src/ tests/
 ```
 
 ## Usage
@@ -59,6 +81,18 @@ page = sub.query_work_items(
 # Replay for integrity check
 report = sub.replay()
 assert report.replayed_drift == 0
+
+# Schedule recurring work
+rule = sub.register_recurrence_rule(
+    workflow_name="spec_pipeline",
+    workflow_version=1,
+    work_item_type="feature",
+    template={"custom_fields": {"title": "Weekly sync"}},
+    schedule_kind="interval",
+    schedule_expr="P7D",
+)
+
+sub.close()
 ```
 
 ## Workflow Definitions
@@ -73,25 +107,66 @@ substrate_version: "0.1.0"
 states:
   - name: new
     initial: true
+  - name: in_progress
+  - name: review
   - name: done
     terminal: true
 
 transitions:
-  - name: complete
+  - name: start
     from: new
-    to: done
+    to: in_progress
     allowed_roles: [agent]
+    hooks: [notify_reviewer]
+  - name: submit_review
+    from: in_progress
+    to: review
+    allowed_roles: [agent]
+  - name: approve
+    from: review
+    to: done
+    allowed_roles: [reviewer]
 
 roles:
   - name: agent
+  - name: reviewer
 
 work_item_types:
-  - name: task
+  - name: feature
     custom_fields:
       - name: title
         type: string
         required: true
         ui_visible: true
+      - name: priority
+        type: enum
+        enum_values: [low, medium, high]
+      - name: metadata
+        type: json
+
+link_types:
+  - name: depends_on
+    source_type: feature
+    target_type: feature
+
+hook_defaults:
+  max_retries: 3
+
+attempt_threshold: 3
+```
+
+### Workflow Composition
+
+Workflows can extend other workflows using `extends:`:
+
+```yaml
+name: extended_pipeline
+extends: base_pipeline.yaml
+transitions:
+  - name: escalate
+    from: review
+    to: escalated
+    __append: true
 ```
 
 ## HMAC Key Format
@@ -110,20 +185,111 @@ work_item_types:
 
 Key statuses: `active`, `deprecated` (accepted with warning), `revoked` (rejected).
 
+## HTTP Sidecar
+
+The optional sidecar exposes the full Substrate API over HTTP for non-Python consumers:
+
+```bash
+pip install ".[sidecar]"
+
+export SUBSTRATE_DSN="postgresql://user:pass@host:5432/mydb"
+export SUBSTRATE_PROJECT="factory"
+export SUBSTRATE_HMAC_KEY_PATH="/secrets/keys.json"
+export SUBSTRATE_TOKENS_PATH="/secrets/tokens.yaml"
+
+python -m substrate.sidecar
+```
+
+Token file (`tokens.yaml`):
+
+```yaml
+tokens:
+  - token_sha256: "<sha256-hex-of-raw-token>"
+    actor_id: "agent-1"
+    actor_kind: "agent"
+    allowed_roles: ["agent", "reviewer"]
+```
+
+All endpoints are under `/v1/`. Requests must not include `signature` or `payload_canonical_hash` (the sidecar signs internally). OpenAPI docs available at `/docs`.
+
+A Dockerfile is provided in `deploy/sidecar/`.
+
+## Admin CLI
+
+```bash
+# Validate a workflow YAML (no database required)
+substrate workflow validate my-workflow.yaml
+
+# Inspect work items
+substrate work-item show <uuid>
+substrate work-item list --workflow my_workflow --claimable-now
+
+# View events
+substrate events show <uuid>
+substrate events tail --actor agent-1 --since "2026-05-01T00:00:00Z"
+
+# Replay drift check
+substrate replay
+
+# Manage recurrence rules
+substrate recurrence list
+substrate recurrence due
+substrate recurrence fire <rule-uuid>
+
+# Schema management
+substrate schema init
+substrate schema status
+
+# Dead-lettered hooks
+substrate hooks dead-letter list
+substrate hooks dead-letter requeue <id>
+
+# Actor roles
+substrate actor-roles list --actor agent-1
+```
+
 ## Architecture
 
 - **Event-sourced**: events are the authoritative log; `work_items_current` is a transactionally-consistent projection
 - **Schema-per-project**: one Postgres database, one schema per project, engine-enforced isolation
-- **Library mode**: runs in-process, no HTTP server, exposes `prometheus_client.CollectorRegistry`
+- **Library mode**: runs in-process, no HTTP server required; exposes `prometheus_client.CollectorRegistry`
 - **Library is sole signer**: HMAC-SHA256 over RFC 8785 canonical JSON, computed internally
+- **Monthly partitioned events**: automatic partition management via `ensure_event_partitions()`
+- **Single-source-of-truth contract**: shared validation/decision functions in `_contract.py` used by both Postgres and in-memory backends
+- **Property-based testing**: hypothesis-driven conformance tests verify both backends behave identically
 
-## Spec
+## Testing
 
-Authoritative spec: `spec.md`. Machine-readable sidecar: `spec.yaml`.
+```bash
+# Start Postgres
+docker compose -f docker-compose.test.yml up -d
+
+# Run core tests
+pytest tests/ -v
+
+# Run including property-based tests (slow)
+pytest tests/ -v -m slow
+
+# Run sidecar tests
+pytest tests/sidecar/ -v
+
+# Lint
+ruff check src/ tests/
+```
+
+Test DSN: `postgresql://substrate_test:substrate_test@localhost:5432/substrate_test`
+
+## Documentation
+
+- **`spec.md`** — authoritative specification
+- **`spec.yaml`** — machine-readable spec sidecar
+- **`AGENTS.md`** — developer guide, source layout, conventions, and project status
+- **`CHANGELOG.md`** — version history
+- **`deploy/sidecar/README.md`** — sidecar deployment guide
 
 ## Status
 
-MVP + Phase 2 + Phase 3 complete. All FRs implemented and tested. See `AGENTS.md` for current status.
+All features through Plan 005 implemented. 528 tests (511 core + 17 sidecar) + 4 scale benchmarks. FR-01 through FR-29 in tree. See `AGENTS.md` for detailed status.
 
 ## License
 

@@ -255,8 +255,7 @@ class TestContinueOnRevokedReplay:
             custom_fields={"title": "Unknown key skip"},
         )
 
-        events = substrate.read_events(work_item_id=wi.work_item_id)
-        original_key_id = events[0].key_id
+        substrate.read_events(work_item_id=wi.work_item_id)
 
         unknown_key_data = {
             "keys": [
