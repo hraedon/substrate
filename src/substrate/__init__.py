@@ -377,6 +377,24 @@ class Substrate:
         """
         return self.register_workflow(Path(path).read_text())
 
+    def get_workflow(self, workflow_name: str, version: int):
+        from ._types import WorkflowDefinition
+
+        timer = OpTimer(self._project, "get_workflow")
+        with self._mgr.transaction() as conn:
+            row = conn.execute(
+                "SELECT definition FROM workflow_registry "
+                "WHERE workflow_name = %s AND version = %s",
+                [workflow_name, version],
+            ).fetchone()
+        if row is None:
+            raise SubstrateError(
+                ErrorCode.WORKFLOW_NOT_REGISTERED,
+                f"Workflow {workflow_name!r} v{version} not found",
+            )
+        timer.log("ok", detail=f"{workflow_name} v{version}")
+        return WorkflowDefinition.from_dict(row["definition"])
+
     def create_work_item(
         self,
         workflow_name: str,
