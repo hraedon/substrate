@@ -185,6 +185,7 @@ def _rebuild_wf(data: dict) -> WorkflowDefinition:
                     ui_visible=f.get("ui_visible", False),
                     enum_values=f.get("enum_values"),
                     target_work_item_type=f.get("target_work_item_type"),
+                    target_work_item_types=f.get("target_work_item_types"),
                 )
                 for f in w.get("custom_fields", [])
             ],

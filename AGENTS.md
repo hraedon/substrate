@@ -186,6 +186,8 @@ RFC-062: Single-source-of-truth backend contract via `_contract.py` — 20 pure 
 
 BC-139: `query_work_items` accepts `custom_field_filters: dict[str, object] | None` for equality filtering on custom field values (AND semantics). Postgres uses JSONB containment (`@>`) with a GIN index. InMemory uses equivalent dict matching. Migration `009_custom_fields_gin.sql` adds the index. Unknown filter keys produce empty results, not errors.
 
+BC-171: `work_item_ref` custom fields now accept `target_work_item_types: [typeA, typeB]` (plural list) in addition to the existing singular `target_work_item_type`. The plural form constrains the referent to one of an enumerated set; each listed type must exist in the workflow. Specifying both singular and plural is rejected at registration (by JSON Schema first, then `_validate_semantics` as defense-in-depth). Omitting both retains the existing behavior: UUID format + existence validation only, no type enforcement.
+
 ## Conventions
 
 - Python 3.11+, `from __future__ import annotations` in all files

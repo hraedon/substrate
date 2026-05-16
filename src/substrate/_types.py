@@ -279,17 +279,22 @@ class CustomFieldDef:
     ui_visible: bool = False
     enum_values: list[str] | None = None
     target_work_item_type: str | None = None
+    target_work_item_types: list[str] | None = None
 
     def to_dict(self) -> dict:
-        return {
+        d: dict[str, object] = {
             "name": self.name,
             "type": self.type,
             "required": self.required,
             "default_value": self.default_value,
             "ui_visible": self.ui_visible,
             "enum_values": self.enum_values,
-            "target_work_item_type": self.target_work_item_type,
         }
+        if self.target_work_item_type is not None:
+            d["target_work_item_type"] = self.target_work_item_type
+        if self.target_work_item_types is not None:
+            d["target_work_item_types"] = self.target_work_item_types
+        return d
 
     @classmethod
     def from_dict(cls, data: dict) -> CustomFieldDef:
@@ -301,6 +306,7 @@ class CustomFieldDef:
             ui_visible=data.get("ui_visible", False),
             enum_values=data.get("enum_values"),
             target_work_item_type=data.get("target_work_item_type"),
+            target_work_item_types=data.get("target_work_item_types"),
         )
 
 

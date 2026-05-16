@@ -160,13 +160,28 @@ def _validate_semantics(data: dict) -> None:
                     f"Unknown field type {ftype!r} in {wit['name']}.{field['name']}",
                 )
             if ftype == "work_item_ref":
-                target = field.get("target_work_item_type")
-                if target and target not in work_item_types:
+                singular = field.get("target_work_item_type")
+                plural = field.get("target_work_item_types")
+                if singular and plural:
                     raise SubstrateError(
                         ErrorCode.WORKFLOW_SEMANTIC_ERROR,
                         f"work_item_ref field {wit['name']}.{field['name']} "
-                        f"references unknown work_item_type {target!r}",
+                        f"specifies both target_work_item_type and target_work_item_types",
                     )
+                if singular and singular not in work_item_types:
+                    raise SubstrateError(
+                        ErrorCode.WORKFLOW_SEMANTIC_ERROR,
+                        f"work_item_ref field {wit['name']}.{field['name']} "
+                        f"references unknown work_item_type {singular!r}",
+                    )
+                if plural:
+                    unknown = [t for t in plural if t not in work_item_types]
+                    if unknown:
+                        raise SubstrateError(
+                            ErrorCode.WORKFLOW_SEMANTIC_ERROR,
+                            f"work_item_ref field {wit['name']}.{field['name']} "
+                            f"references unknown work_item_types: {sorted(unknown)}",
+                        )
 
     for lt in link_types:
         if lt["source_type"] not in work_item_types:
@@ -210,6 +225,7 @@ def build_definition(data: dict, raw_yaml: str) -> WorkflowDefinition:
                 ui_visible=f.get("ui_visible", False),
                 enum_values=f.get("enum_values"),
                 target_work_item_type=f.get("target_work_item_type"),
+                target_work_item_types=f.get("target_work_item_types"),
             )
             for f in wit.get("custom_fields", [])
         ]
@@ -327,6 +343,7 @@ def validate_field_update(
             ui_visible=field_def.get("ui_visible", False),
             enum_values=field_def.get("enum_values"),
             target_work_item_type=field_def.get("target_work_item_type"),
+            target_work_item_types=field_def.get("target_work_item_types"),
         )
         _coerce_field(fd, value)
 
@@ -364,6 +381,7 @@ def validate_work_item_refs(
                 detail={"field": field_def["name"], "value": value},
             )
         target_type = field_def.get("target_work_item_type")
+        target_types = field_def.get("target_work_item_types")
 
         row = conn.execute(
             SQL("SELECT work_item_type FROM work_items_current WHERE work_item_id = %s"),
@@ -387,6 +405,19 @@ def validate_work_item_refs(
                     "value": value,
                     "actual_type": row["work_item_type"],
                     "expected_type": target_type,
+                },
+            )
+
+        if target_types and row["work_item_type"] not in target_types:
+            raise SubstrateError(
+                ErrorCode.CUSTOM_FIELD_VIOLATION,
+                f"Field {field_def['name']!r} references work item of type "
+                f"{row['work_item_type']!r}, expected one of {sorted(target_types)}",
+                detail={
+                    "field": field_def["name"],
+                    "value": value,
+                    "actual_type": row["work_item_type"],
+                    "expected_types": sorted(target_types),
                 },
             )
 

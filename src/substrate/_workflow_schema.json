@@ -184,6 +184,13 @@
                 },
                 "target_work_item_type": {
                   "type": "string"
+                },
+                "target_work_item_types": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1
                 }
               },
               "allOf": [
@@ -201,6 +208,14 @@
                   "then": {
                     "required": [
                       "enum_values"
+                    ]
+                  }
+                },
+                {
+                  "not": {
+                    "required": [
+                      "target_work_item_type",
+                      "target_work_item_types"
                     ]
                   }
                 }

@@ -38,6 +38,7 @@ _(none)_
 | # | Title | Severity | Resolution |
 |---|---|---|---|
 | 170 | `register_workflow_file` double-reads file when no `extends:` | low | Hoisted `raw_text = p.read_text()` before the branch; single read in both backends. |
+| 171 | `work_item_ref` fields cannot declare multiple allowed target_work_item_types | low | Added `target_work_item_types: list[str]` to `CustomFieldDef`; both-present (singular + plural) rejected at registration; plural form validated at runtime in Postgres and InMemory backends. JSON Schema updated. 9 new tests. |
 | 169 | Sidecar `fire_recurrence`/`cancel_recurrence_rule`/`requeue_dead_lettered_hook` use raw `dict` body — no input validation | high | Created typed Pydantic models (`FireRecurrenceRequest`, `RequeueDeadLetteredHookRequest`); added `rule_id` to `CancelRecurrenceRuleRequest`; updated routes. |
 | 168 | Sidecar `list_recurrence_rules` and `list_actor_roles` drop filter parameters | high | Both routes now read `status`/`actor_id` from query params and pass through to core API. |
 | 167 | `claim_hooks` marks all rows `in_progress` before filtering — hooks with missing `work_item_id` stranded | high | Reordered: build valid_ids first, only mark those rows `in_progress`. Rows without work_item_id stay pending for normal dead-letter path. |

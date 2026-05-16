@@ -1491,6 +1491,7 @@ class InMemorySubstrate:
                 continue
             ref_uuid = uuid.UUID(value)
             target_type = field_def.get("target_work_item_type")
+            target_types = field_def.get("target_work_item_types")
             ref_wi = self._work_items.get(ref_uuid)
             if ref_wi is None:
                 raise SubstrateError(
@@ -1508,6 +1509,18 @@ class InMemorySubstrate:
                         "value": value,
                         "actual_type": ref_wi["work_item_type"],
                         "expected_type": target_type,
+                    },
+                )
+            if target_types and ref_wi["work_item_type"] not in target_types:
+                raise SubstrateError(
+                    ErrorCode.CUSTOM_FIELD_VIOLATION,
+                    f"Field {field_def['name']!r} references work item of type "
+                    f"{ref_wi['work_item_type']!r}, expected one of {sorted(target_types)}",
+                    detail={
+                        "field": field_def["name"],
+                        "value": value,
+                        "actual_type": ref_wi["work_item_type"],
+                        "expected_types": sorted(target_types),
                     },
                 )
 
