@@ -4,6 +4,47 @@ Structured log of development sessions and milestones.
 
 ---
 
+## 2026-05-16 — Session 28: Transition extraction, CLI recurrence, Plan 005 HTTP sidecar, README/CHANGELOG, CI fixes
+
+**Focus:** Deliver all remaining near-term items: transition extraction, CLI recurrence subcommands, structlog stderr, Plan 005 HTTP sidecar, changelog, README update, CI fixes.
+
+**Delivered:**
+
+1. **Cleaned stale pending/ breadcrumbs** — Removed 12 duplicate entries from `breadcrumbs/pending/README.md` that were already resolved in the main index.
+
+2. **Routed structlog to stderr in CLI** — `_cli.py` now configures structlog with `_StderrLoggerFactory` that resolves `sys.stderr` lazily at print-time. Fixes pytest capture conflict where the old `PrintLoggerFactory(file=sys.stderr)` captured a closed file handle.
+
+3. **Extracted `transition()` to `_transition.py`** — Moved the ~180-line method body from `Substrate.transition()` in `__init__.py` to `src/substrate/_transition.py`, following the `_recurrence_api.py` facade pattern. The `Substrate` class now delegates via a thin wrapper. All 511 core tests pass unchanged.
+
+4. **Added CLI recurrence subcommands** — `substrate recurrence list/due/fire/cancel/update` with appropriate flags and JSON output support. Six new command handlers and subparser registrations in `_cli.py`.
+
+5. **Implemented Plan 005 HTTP sidecar** — Full FastAPI sidecar in `src/substrate/sidecar/`:
+   - `app.py`: FastAPI app factory with sole-signer middleware and SubstrateError exception handler
+   - `auth.py`: Bearer-token registry with SHA-256 hashed tokens loaded from YAML
+   - `routes.py`: 1:1 pass-through of all Substrate public methods (25+ endpoints)
+   - `routes_hooks.py`: Hook claim/complete/fail lifecycle for non-Python consumers
+   - `models.py`: Pydantic request/response models with `extra="forbid"`
+   - `errors.py`: ErrorCode → HTTP status code mapping
+   - `__main__.py`: CLI entry point via `python -m substrate.sidecar`
+   - Added `LIBRARY_IS_SOLE_SIGNER` error code to `_errors.py`
+   - Added `[sidecar]` optional dependency group to `pyproject.toml`
+   - Dockerfile and README in `deploy/sidecar/`
+   - 17 integration tests in `tests/sidecar/test_sidecar.py`
+
+6. **CHANGELOG.md** — v0.1.0 release notes covering all features through Plan 005.
+
+7. **Updated README.md** — Expanded from 130 to ~230 lines with features list, workflow composition example, HTTP sidecar docs, admin CLI reference, testing section, and documentation index.
+
+8. **CI fixes** — Fixed 11 test lint errors (unused imports, E741, RUF012, import sorting). Fixed CLI integration tests using `sys.executable` instead of hardcoded `.venv/bin/python` path.
+
+**Files modified/created:**
+- New: `src/substrate/_transition.py`, `src/substrate/sidecar/` (8 files), `tests/sidecar/test_sidecar.py`, `deploy/sidecar/Dockerfile`, `deploy/sidecar/README.md`, `CHANGELOG.md`
+- Modified: `src/substrate/__init__.py`, `src/substrate/_cli.py`, `src/substrate/_errors.py`, `pyproject.toml`, `AGENTS.md`, `README.md`, `breadcrumbs/pending/README.md`, `tests/test_contract.py`, `tests/test_phase3.py`, `tests/test_cli_integration.py`, `tests/test_recurrence.py`
+
+**Test results:** 528 passed (511 core + 17 sidecar), lint clean.
+
+---
+
 ## 2026-05-15 — Session 27: Implement Plans 002–004 (Admin CLI, Recurring Work Items, Workflow Composition)
 
 **Focus:** Deliver all three pending plans.
