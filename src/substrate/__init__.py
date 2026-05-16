@@ -7,6 +7,7 @@ from pathlib import Path
 
 import psycopg.types.json
 import structlog
+import yaml as _yaml
 
 from ._connection import ConnectionManager
 from ._contract import (
@@ -66,6 +67,7 @@ from ._types import (
 )
 from ._workflow import parse_and_validate
 from ._workflow import parse_file as parse_file
+from ._workflow import parse_workflow_yaml as parse_workflow_yaml
 from ._workflow import validate_yaml as validate_yaml
 from ._workflow_compose import compose_workflow as compose_workflow
 
@@ -460,8 +462,7 @@ class Substrate:
         self,
         path: str | Path,
     ) -> WorkflowVersion:
-        """Register a workflow from a file path. Convenience wrapper around
-        ``register_workflow``.
+        """Register a workflow from a file path. Handles extends: composition.
 
         Args:
             path: Path to a workflow YAML file.
@@ -469,7 +470,17 @@ class Substrate:
         Returns:
             The registered ``WorkflowVersion``.
         """
-        return self.register_workflow(Path(path).read_text())
+        from ._workflow_compose import resolve_includes
+
+        p = Path(path)
+        raw_text = p.read_text()
+        raw_dict = parse_workflow_yaml(raw_text)
+        if "extends" in raw_dict:
+            composed, _ = resolve_includes(p, compose_root=p.parent)
+            composed_yaml = _yaml.dump(composed, default_flow_style=False, sort_keys=False)
+        else:
+            composed_yaml = raw_text
+        return self.register_workflow(composed_yaml)
 
     def get_workflow(self, workflow_name: str, version: int):
         from ._types import WorkflowDefinition

@@ -2,8 +2,8 @@
 
 Coordination and durable state for agent pipelines over Postgres.
 
-[![CI](https://github.com/anomalyco/substrate/actions/workflows/ci.yml/badge.svg)](https://github.com/anomalyco/substrate/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-528%20passing-brightgreen)]()
+[![CI](https://github.com/hraedon/substrate/actions/workflows/ci.yml/badge.svg)](https://github.com/hraedon/substrate/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/tests-529%20passing-brightgreen)]()
 [![License](https://img.shields.io/badge/license-MIT-blue)]()
 
 Substrate is a Python library that provides durable claims, event-sourced state, validated state transitions, and typed links for multi-role agent pipelines. Each project deploys substrate as its own isolated instance using schema-per-project isolation within a single Postgres database.

@@ -5,6 +5,8 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import yaml
+
 from ._contract import (
     Jsonb,
     check_actor_role_authorized,
@@ -284,7 +286,17 @@ class InMemorySubstrate:
         )
 
     def register_workflow_file(self, path: str | Path) -> WorkflowVersion:
-        return self.register_workflow(Path(path).read_text())
+        from ._workflow_compose import resolve_includes
+
+        p = Path(path)
+        raw_text = p.read_text()
+        raw_dict = parse_workflow_yaml(raw_text)
+        if "extends" in raw_dict:
+            composed, _ = resolve_includes(p, compose_root=p.parent)
+            composed_yaml = yaml.dump(composed, default_flow_style=False, sort_keys=False)
+        else:
+            composed_yaml = raw_text
+        return self.register_workflow(composed_yaml)
 
     def get_workflow(self, workflow_name: str, version: int) -> WorkflowDefinition:
         key = (workflow_name, version)
