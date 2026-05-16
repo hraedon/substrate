@@ -4,6 +4,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import uuid
 from pathlib import Path
 
@@ -15,7 +16,7 @@ TESTS_DIR = Path(__file__).parent
 DSN = "postgresql://substrate_test:substrate_test@localhost:5432/substrate_test"
 KEY_PATH = str(TESTS_DIR / "test_keys.json")
 WORKFLOW_PATH = str(TESTS_DIR / "test_workflow.yaml")
-PYTHON = str(Path(__file__).resolve().parents[1] / ".venv" / "bin" / "python")
+PYTHON = sys.executable
 
 
 def _run(*args, env=None):
