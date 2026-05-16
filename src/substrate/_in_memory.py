@@ -1380,16 +1380,13 @@ class InMemorySubstrate:
         new_count = rule["count_remaining"]
         if new_count is not None:
             new_count -= 1
-            if new_count <= 0:
-                new_count = None
-        if next_fire is None:
+        if new_count is not None and new_count <= 0:
+            new_status = "exhausted"
+            next_fire = None
+        elif next_fire is None:
             new_status = "exhausted"
         else:
-            if new_count is not None and new_count <= 0:
-                new_status = "exhausted"
-                next_fire = None
-            else:
-                new_status = "active"
+            new_status = "active"
         rule["last_fired_at"] = now
         rule["next_fire_at"] = next_fire or now + timedelta(days=36500)
         rule["count_remaining"] = new_count

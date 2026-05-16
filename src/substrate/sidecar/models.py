@@ -164,10 +164,6 @@ class UnregisterActorRoleRequest(BaseModel):
     role: str
 
 
-class GetWorkflowRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-
 class RegisterRecurrenceRuleRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     workflow_name: str
@@ -185,10 +181,22 @@ class RegisterRecurrenceRuleRequest(BaseModel):
 
 class CancelRecurrenceRuleRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    rule_id: str
+
+
+class FireRecurrenceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    rule_id: str
+
+
+class RequeueDeadLetteredHookRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    dead_letter_id: int
 
 
 class UpdateRecurrenceRuleRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    rule_id: str
     status: str | None = None
     schedule_expr: str | None = None
     template: dict | None = None

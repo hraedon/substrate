@@ -37,6 +37,15 @@ _(none)_
 
 | # | Title | Severity | Resolution |
 |---|---|---|---|
+| 169 | Sidecar `fire_recurrence`/`cancel_recurrence_rule`/`requeue_dead_lettered_hook` use raw `dict` body — no input validation | high | Created typed Pydantic models (`FireRecurrenceRequest`, `RequeueDeadLetteredHookRequest`); added `rule_id` to `CancelRecurrenceRuleRequest`; updated routes. |
+| 168 | Sidecar `list_recurrence_rules` and `list_actor_roles` drop filter parameters | high | Both routes now read `status`/`actor_id` from query params and pass through to core API. |
+| 167 | `claim_hooks` marks all rows `in_progress` before filtering — hooks with missing `work_item_id` stranded | high | Reordered: build valid_ids first, only mark those rows `in_progress`. Rows without work_item_id stay pending for normal dead-letter path. |
+| 166 | Recurrence `count_remaining` exhaustion sets `None` instead of stopping — rules fire forever | critical | Check `new_count <= 0` before setting to None; exhausted status set immediately. Fixed in both Postgres and InMemory backends. |
+| 165 | Sidecar `heartbeat_claim` uses `AcquireClaimRequest` instead of `HeartbeatClaimRequest` — `expected_attempt_number` dropped | critical | Route now uses `HeartbeatClaimRequest`; wires `expected_attempt_number` through to core API. |
+| 161 | Sidecar `update_recurrence_rule` reads `rule_id` from query_params instead of body — KeyError at runtime | high | Added `rule_id: str` to `UpdateRecurrenceRuleRequest` model; route handler reads `_parse_uuid(body.rule_id)` instead of `request.query_params`. |
+| 162 | Sidecar sole-signer middleware reads request body before Pydantic — depends on Starlette body caching | medium | Middleware now reads via `request.stream()` explicitly and caches on `request._body`, making the body-available-to-downstream contract explicit. |
+| 163 | Sidecar hook lifecycle tests are stubs — Plan 005 §10 not fully exercised | medium | Added `hook_test_workflow` with `hooks: [on_complete]` on transition; implemented claim→complete round trip, lease expiry→sweep→reclaim, and sweep tests. |
+| 164 | `_find_next_future_slot` 10000-iter cap silently loses slots on sub-minute schedules | medium | Interval schedules now compute next-future-slot in closed form (O(1) arithmetic). Rrule schedules raise `RECURRENCE_SCHEDULE_INVALID` on cap hit instead of returning stale slot. |
 | 160 | ConnectionPool missing configurable `max_lifetime` and health-check parameters | low | Added `pool_max_lifetime` parameter to `ConnectionManager`, `Substrate.__init__`, and `Substrate.create_project`, passed through to `psycopg_pool.ConnectionPool(max_lifetime=...)`. |
 | 159 | `timestamp` custom field validation only checks `isinstance(str)`, accepts invalid date strings | low | Added `datetime.fromisoformat(value)` validation in `_coerce_field` for timestamp type, raises CUSTOM_FIELD_VIOLATION on invalid ISO strings. |
 | 158 | `_parse_semver` crashes with `IndexError` on non-3-part version strings | medium | `_parse_semver` now validates exactly 3 dot-separated components, raises SubstrateError(WORKFLOW_VERSION_INCOMPATIBLE) on malformed input with descriptive message. |

@@ -114,6 +114,18 @@ def _find_next_future_slot(
     now: datetime,
     end_at: datetime | None,
 ) -> datetime | None:
+    if schedule_kind == "interval":
+        td = _parse_iso8601_duration(schedule_expr)
+        if td.total_seconds() <= 0:
+            return None
+        elapsed = (now - after_slot).total_seconds()
+        interval_secs = td.total_seconds()
+        steps = int(elapsed // interval_secs) + 1
+        candidate = after_slot + timedelta(seconds=steps * interval_secs)
+        if end_at is not None and candidate > end_at:
+            return None
+        return candidate
+
     candidate = after_slot
     max_iterations = 10000
     for _ in range(max_iterations):
@@ -125,7 +137,10 @@ def _find_next_future_slot(
         if next_candidate > now:
             return next_candidate
         candidate = next_candidate
-    return candidate
+    raise SubstrateError(
+        ErrorCode.RECURRENCE_SCHEDULE_INVALID,
+        f"Catch-up iteration cap exceeded for rrule schedule {schedule_expr!r}",
+    )
 
 
 def validate_template(template: dict) -> None:
@@ -338,17 +353,13 @@ def fire_recurrence(
     new_count = rule["count_remaining"]
     if new_count is not None:
         new_count -= 1
-        if new_count <= 0:
-            new_count = None
-
-    if next_fire is None:
+    if new_count is not None and new_count <= 0:
+        new_status = "exhausted"
+        next_fire = None
+    elif next_fire is None:
         new_status = "exhausted"
     else:
-        if new_count is not None and new_count <= 0:
-            new_status = "exhausted"
-            next_fire = None
-        else:
-            new_status = "active"
+        new_status = "active"
 
     template = rule["template"]
     not_before_offset = template.get("not_before_offset_seconds", 0)

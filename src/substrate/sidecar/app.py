@@ -24,7 +24,10 @@ def create_app(substrate, tokens: TokenRegistry) -> FastAPI:
     @app.middleware("http")
     async def sole_signer_middleware(request: Request, call_next):
         if request.method == "POST" and request.url.path.startswith("/v1"):
-            body_bytes = await request.body()
+            body_bytes = b""
+            async for chunk in request.stream():
+                body_bytes += chunk
+            request._body = body_bytes
             if body_bytes:
                 try:
                     raw = json.loads(body_bytes)

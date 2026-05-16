@@ -134,23 +134,14 @@ def claim_hooks(
     if not rows:
         return []
 
-    ids = [r["id"] for r in rows]
-    lease_expires_at = datetime.now(UTC) + timedelta(seconds=lease_seconds)
-    conn.execute(
-        SQL(
-            "UPDATE hook_queue SET status = 'in_progress', "
-            "lease_expires_at = %s, updated_at = now() "
-            "WHERE id = ANY(%s)"
-        ),
-        [lease_expires_at, ids],
-    )
-
+    valid_ids = []
     result = []
     for row in rows:
         payload = row["payload"] or {}
         raw_wi_id = payload.get("work_item_id")
         if raw_wi_id is None:
             continue
+        valid_ids.append(row["id"])
         result.append(HookContext(
             hook_queue_id=row["id"],
             event_id=row["event_id"],
@@ -159,6 +150,19 @@ def claim_hooks(
             transition=payload.get("transition"),
             payload=payload.get("event_payload"),
         ))
+
+    if not valid_ids:
+        return []
+
+    lease_expires_at = datetime.now(UTC) + timedelta(seconds=lease_seconds)
+    conn.execute(
+        SQL(
+            "UPDATE hook_queue SET status = 'in_progress', "
+            "lease_expires_at = %s, updated_at = now() "
+            "WHERE id = ANY(%s)"
+        ),
+        [lease_expires_at, valid_ids],
+    )
     return result
 
 

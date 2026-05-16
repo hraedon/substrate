@@ -11,8 +11,11 @@ from .auth import AuthenticatedActor, TokenRegistry
 from .models import (
     AcquireClaimRequest,
     AppendEventRequest,
+    CancelRecurrenceRuleRequest,
     CreateLinkRequest,
     CreateWorkItemRequest,
+    FireRecurrenceRequest,
+    HeartbeatClaimRequest,
     QueryWorkItemsRequest,
     ReadEventsRequest,
     ReadEventsSinceRequest,
@@ -22,6 +25,7 @@ from .models import (
     ReleaseClaimRequest,
     RemoveLinkRequest,
     ReplayRequest,
+    RequeueDeadLetteredHookRequest,
     TransitionRequest,
     UnregisterActorRoleRequest,
     UpdateNotBeforeRequest,
@@ -195,12 +199,13 @@ def register_routes(app, substrate, tokens: TokenRegistry):
         return _serialize(result)
 
     @router.post("/heartbeat_claim")
-    async def heartbeat_claim(body: AcquireClaimRequest, request: Request):
+    async def heartbeat_claim(body: HeartbeatClaimRequest, request: Request):
         actor = _get_actor(request)
         result = substrate.heartbeat_claim(
             work_item_id=_parse_uuid(body.work_item_id),
             actor_id=actor.actor_id,
             ttl_seconds=body.ttl_seconds,
+            expected_attempt_number=body.expected_attempt_number,
         )
         return _serialize(result)
 
@@ -276,9 +281,9 @@ def register_routes(app, substrate, tokens: TokenRegistry):
         return _serialize(result)
 
     @router.post("/requeue_dead_lettered_hook")
-    async def requeue_dead_lettered_hook(body: dict, request: Request):
+    async def requeue_dead_lettered_hook(body: RequeueDeadLetteredHookRequest, request: Request):
         _get_actor(request)
-        substrate.requeue_dead_lettered_hook(int(body["dead_letter_id"]))
+        substrate.requeue_dead_lettered_hook(body.dead_letter_id)
         return {"status": "ok"}
 
     @router.post("/register_actor_role")
@@ -301,7 +306,8 @@ def register_routes(app, substrate, tokens: TokenRegistry):
     @router.get("/actor_roles")
     async def list_actor_roles(request: Request):
         _get_actor(request)
-        result = substrate.list_actor_roles()
+        actor_id = request.query_params.get("actor_id")
+        result = substrate.list_actor_roles(actor_id=actor_id)
         return _serialize(result)
 
     @router.post("/register_recurrence_rule")
@@ -326,26 +332,27 @@ def register_routes(app, substrate, tokens: TokenRegistry):
     @router.get("/recurrence_rules")
     async def list_recurrence_rules(request: Request):
         _get_actor(request)
-        result = substrate.list_recurrence_rules()
+        status = request.query_params.get("status")
+        result = substrate.list_recurrence_rules(status=status)
         return _serialize(result)
 
     @router.post("/fire_recurrence")
-    async def fire_recurrence(body: dict, request: Request):
+    async def fire_recurrence(body: FireRecurrenceRequest, request: Request):
         _get_actor(request)
-        rule, wi = substrate.fire_recurrence(_parse_uuid(body["rule_id"]))
+        rule, wi = substrate.fire_recurrence(_parse_uuid(body.rule_id))
         return {"rule": _serialize(rule), "work_item": _serialize(wi)}
 
     @router.post("/cancel_recurrence_rule")
-    async def cancel_recurrence_rule(body: dict, request: Request):
+    async def cancel_recurrence_rule(body: CancelRecurrenceRuleRequest, request: Request):
         _get_actor(request)
-        substrate.cancel_recurrence_rule(_parse_uuid(body["rule_id"]))
+        substrate.cancel_recurrence_rule(_parse_uuid(body.rule_id))
         return {"status": "ok"}
 
     @router.post("/update_recurrence_rule")
     async def update_recurrence_rule(body: UpdateRecurrenceRuleRequest, request: Request):
         _get_actor(request)
         result = substrate.update_recurrence_rule(
-            rule_id=_parse_uuid(request.query_params.get("rule_id", "")),
+            rule_id=_parse_uuid(body.rule_id),
             status=body.status,
             schedule_expr=body.schedule_expr,
             template=body.template,

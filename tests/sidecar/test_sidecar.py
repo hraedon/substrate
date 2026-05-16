@@ -85,6 +85,39 @@ def workflow_id(substrate_instance):
     return yaml_content
 
 
+HOOK_TEST_WORKFLOW_YAML = """\
+name: hook_test_workflow
+version: 1
+substrate_version: "0.1.0"
+
+states:
+  - name: new
+    initial: true
+  - name: done
+    terminal: true
+
+transitions:
+  - name: complete
+    from: new
+    to: done
+    hooks:
+      - on_complete
+
+roles:
+  - name: agent
+
+work_item_types:
+  - name: task
+    custom_fields:
+      - name: title
+        type: string
+        required: true
+
+link_types: []
+attempt_threshold: 3
+"""
+
+
 class TestAuth:
     def test_auth_required(self, client):
         resp = client.post("/v1/create_work_item", json={
@@ -313,8 +346,119 @@ class TestNoValidatorOverHttp:
 
 
 class TestHookQueue:
-    def test_claim_complete_round_trip(self, client, auth_headers, workflow_id, substrate_instance):
-        pass
+    @pytest.fixture(autouse=True)
+    def _register_hook_workflow(self, substrate_instance):
+        substrate_instance.register_workflow(HOOK_TEST_WORKFLOW_YAML)
+
+    def test_claim_complete_round_trip(self, client, auth_headers, substrate_instance):
+        resp = client.post(
+            "/v1/create_work_item",
+            json={
+                "workflow_name": "hook_test_workflow",
+                "work_item_type": "task",
+                "custom_fields": {"title": "hook test"},
+            },
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        wi_id = resp.json()["work_item"]["work_item_id"]
+
+        client.post(
+            "/v1/register_actor_role",
+            json={"role": "agent"},
+            headers=auth_headers,
+        )
+
+        resp = client.post(
+            "/v1/transition",
+            json={
+                "work_item_id": wi_id,
+                "transition_name": "complete",
+                "actor_metadata": {"role": "agent"},
+            },
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+
+        resp = client.post(
+            "/v1/hooks/claim",
+            json={"max_batch": 10, "lease_seconds": 60},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        hooks = resp.json()
+        assert len(hooks) >= 1
+        hook_id = hooks[0]["hook_queue_id"]
+
+        resp = client.post(
+            f"/v1/hooks/{hook_id}/complete",
+            json={},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+
+    def test_hook_lease_expiry_requeues(self, client, auth_headers, substrate_instance):
+        import time
+
+        resp = client.post(
+            "/v1/create_work_item",
+            json={
+                "workflow_name": "hook_test_workflow",
+                "work_item_type": "task",
+                "custom_fields": {"title": "lease test"},
+            },
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        wi_id = resp.json()["work_item"]["work_item_id"]
+
+        client.post(
+            "/v1/register_actor_role",
+            json={"role": "agent"},
+            headers=auth_headers,
+        )
+
+        resp = client.post(
+            "/v1/transition",
+            json={
+                "work_item_id": wi_id,
+                "transition_name": "complete",
+                "actor_metadata": {"role": "agent"},
+            },
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+
+        resp = client.post(
+            "/v1/hooks/claim",
+            json={"max_batch": 10, "lease_seconds": 1},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        hooks = resp.json()
+        assert len(hooks) >= 1
+
+        time.sleep(2)
+
+        resp = client.post("/v1/sweep_expired_hook_leases", headers=auth_headers)
+        assert resp.status_code == 200
+        assert resp.json()["swept"] >= 1
+
+        resp = client.post(
+            "/v1/hooks/claim",
+            json={"max_batch": 10, "lease_seconds": 60},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        reclaimed = resp.json()
+        assert len(reclaimed) >= 1
+
+        hook_id = reclaimed[0]["hook_queue_id"]
+        client.post(
+            f"/v1/hooks/{hook_id}/complete",
+            json={},
+            headers=auth_headers,
+        )
 
     def test_sweep_expired_hook_leases(self, client, auth_headers):
         resp = client.post("/v1/sweep_expired_hook_leases", headers=auth_headers)
