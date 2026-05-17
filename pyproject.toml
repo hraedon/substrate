@@ -43,7 +43,7 @@ substrate = "substrate._cli:main"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
-addopts = "-m 'not slow'"
+addopts = "-m 'not slow' --strict-markers"
 markers = [
     "slow: scale benchmarks, skipped by default",
 ]

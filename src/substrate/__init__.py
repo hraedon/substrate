@@ -5,7 +5,6 @@ from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
-import psycopg.types.json
 import structlog
 import yaml as _yaml
 
@@ -14,20 +13,9 @@ from ._contract import (
     Jsonb as _Jsonb,
 )
 from ._contract import (
-    check_append_blocked as _check_append_blocked,
-)
-from ._contract import (
-    check_reserved_transition as _check_reserved_transition,
-)
-from ._contract import (
     validate_mutation_params as _validate_mutation_params,
 )
-from ._contract import (
-    validate_read_events_filters as _validate_read_events_filters,
-)
 from ._errors import ErrorCode, SubstrateError
-from ._event_store import PostgresEventStore as _PostgresEventStore
-from ._event_store import append_event as _store_append_event
 from ._integrity import SUBSTRATE_VERSION, check_integrity
 from ._keys import KeySet
 from ._migrations import run_migrations
@@ -65,7 +53,7 @@ from ._types import (
 from ._types import (
     WorkflowDefinition as WorkflowDefinition,
 )
-from ._workflow import parse_and_validate
+from ._workflow import parse_and_validate as parse_and_validate
 from ._workflow import parse_file as parse_file
 from ._workflow import parse_workflow_yaml as parse_workflow_yaml
 from ._workflow import validate_yaml as validate_yaml
@@ -140,7 +128,7 @@ class Substrate:
                 metrics=self._metrics,
             )
             check_integrity(self._mgr)
-        except:
+        except Exception:
             self._mgr.close()
             raise
         log.info("substrate.connected", project=project, substrate_version=SUBSTRATE_VERSION)
@@ -393,74 +381,9 @@ class Substrate:
             SubstrateError: ``WORKFLOW_VALIDATION_FAILED``,
                 ``WORKFLOW_SEMANTIC_ERROR``, ``WORKFLOW_VERSION_CONFLICT``.
         """
-        timer = OpTimer(self._project, "register_workflow")
-        try:
-            wf = parse_and_validate(yaml_content)
-            from ._workflow import compute_content_hash, compute_content_hash_from_dict
+        from ._workflow_api import register_workflow as _impl
 
-            content_hash = compute_content_hash(wf)
-            with self._mgr.transaction() as conn:
-                from psycopg.sql import SQL
-
-                existing = conn.execute(
-                    SQL(
-                        "SELECT workflow_name, version, substrate_version, registered_at, "
-                        "content_hash, definition "
-                        "FROM workflow_registry WHERE workflow_name = %s AND version = %s"
-                    ),
-                    [wf.name, wf.version],
-                ).fetchone()
-                if existing is not None:
-                    existing_hash = existing["content_hash"]
-                    if existing_hash is None:
-                        existing_hash = compute_content_hash_from_dict(existing["definition"])
-                        conn.execute(
-                            SQL(
-                                "UPDATE workflow_registry SET content_hash = %s "
-                                "WHERE workflow_name = %s AND version = %s"
-                            ),
-                            [existing_hash, wf.name, wf.version],
-                        )
-                    if existing_hash != content_hash:
-                        raise SubstrateError(
-                            ErrorCode.WORKFLOW_VERSION_CONFLICT,
-                            f"Workflow {wf.name!r} v{wf.version} already registered "
-                            f"with different content",
-                            detail={"workflow_name": wf.name, "version": wf.version},
-                        )
-                    timer.log("ok", detail=f"idempotent:{wf.name} v{wf.version}")
-                    return WorkflowVersion(
-                        name=existing["workflow_name"],
-                        version=existing["version"],
-                        substrate_version=existing["substrate_version"],
-                        registered_at=existing["registered_at"],
-                    )
-
-                row = conn.execute(
-                    SQL(
-                        "INSERT INTO workflow_registry "
-                        "(workflow_name, version, substrate_version, definition, content_hash) "
-                        "VALUES (%s, %s, %s, %s, %s) "
-                        "RETURNING registered_at"
-                    ),
-                    [
-                        wf.name, wf.version, wf.substrate_version,
-                        psycopg.types.json.Jsonb(wf.to_dict()),
-                        content_hash,
-                    ],
-                ).fetchone()
-
-            self._metrics.inc("workflows_registered", self._project)
-            timer.log("ok", detail=wf.name)
-            return WorkflowVersion(
-                name=wf.name,
-                version=wf.version,
-                substrate_version=wf.substrate_version,
-                registered_at=row["registered_at"],
-            )
-        except SubstrateError:
-            timer.log("error")
-            raise
+        return _impl(self._mgr, self._metrics, self._project, yaml_content)
 
     def register_workflow_file(
         self,
@@ -474,35 +397,25 @@ class Substrate:
         Returns:
             The registered ``WorkflowVersion``.
         """
-        from ._workflow_compose import resolve_includes
+        from ._workflow_api import register_workflow_file as _impl
 
-        p = Path(path)
-        raw_text = p.read_text()
-        raw_dict = parse_workflow_yaml(raw_text)
-        if "extends" in raw_dict:
-            composed, _ = resolve_includes(p, compose_root=p.parent)
-            composed_yaml = _yaml.dump(composed, default_flow_style=False, sort_keys=False)
-        else:
-            composed_yaml = raw_text
-        return self.register_workflow(composed_yaml)
+        return _impl(
+            self._mgr, self._metrics, self._project,
+            parse_workflow_yaml, _yaml.dump, path,
+        )
 
     def get_workflow(self, workflow_name: str, version: int):
-        from ._types import WorkflowDefinition
+        """Retrieve a workflow definition by name and version.
 
-        timer = OpTimer(self._project, "get_workflow")
-        with self._mgr.transaction() as conn:
-            row = conn.execute(
-                "SELECT definition FROM workflow_registry "
-                "WHERE workflow_name = %s AND version = %s",
-                [workflow_name, version],
-            ).fetchone()
-        if row is None:
-            raise SubstrateError(
-                ErrorCode.WORKFLOW_NOT_REGISTERED,
-                f"Workflow {workflow_name!r} v{version} not found",
-            )
-        timer.log("ok", detail=f"{workflow_name} v{version}")
-        return WorkflowDefinition.from_dict(row["definition"])
+        Returns:
+            ``WorkflowDefinition``.
+
+        Raises:
+            SubstrateError: ``WORKFLOW_NOT_REGISTERED``.
+        """
+        from ._workflow_api import get_workflow as _impl
+
+        return _impl(self._mgr, self._project, workflow_name, version)
 
     def create_work_item(
         self,
@@ -535,134 +448,16 @@ class Substrate:
             SubstrateError: ``WORKFLOW_NOT_REGISTERED``,
                 ``WORK_ITEM_TYPE_NOT_DECLARED``, ``CUSTOM_FIELD_VIOLATION``.
         """
-        timer = OpTimer(self._project, "create_work_item")
-        try:
-            _validate_mutation_params(
-                actor_id=actor_id,
-                actor_kind=actor_kind,
-                event_id=event_id,
-                not_before=not_before,
-            )
-            from ._work_items import create_work_item as _create
+        from ._work_items_api import create_work_item as _impl
 
-            with self._mgr.transaction() as conn:
-                wi, evt = _create(
-                    conn,
-                    workflow_name=workflow_name,
-                    work_item_type=work_item_type,
-                    actor_id=actor_id,
-                    actor_kind=actor_kind,
-                    actor_metadata=_Jsonb(actor_metadata) if actor_metadata is not None else None,
-                    key_set=self._keys,
-                    custom_fields=custom_fields,
-                    not_before=not_before,
-                    event_id=event_id,
-                )
-
-            self._metrics.inc("work_items_created", self._project)
-            self._metrics.inc("events_appended", self._project)
-            timer.log("ok", work_item_id=str(wi.work_item_id))
-            return wi, evt
-        except SubstrateError:
-            timer.log("error")
-            raise
-
-    def append_event(
-        self,
-        work_item_id: uuid.UUID,
-        actor_id: str,
-        actor_kind: str = "agent",
-        actor_metadata: dict | None = None,
-        *,
-        transition: str | None = None,
-        payload: dict | None = None,
-        event_id: uuid.UUID | None = None,
-        expected_event_seq: int | None = None,
-    ) -> Event:
-        """Append a free-form event to the work-item log.
-
-        Rejects transitions that match a workflow-defined transition name — use
-        ``transition()`` for state changes.
-
-        Args:
-            work_item_id: Target work item.
-            actor_id: Authenticated actor.
-            actor_kind: ``"agent"`` | ``"human"`` | ``"system"``.
-            actor_metadata: Optional JSONB metadata.
-            transition: Free-form transition label (must not collide with workflow).
-            payload: Optional JSONB payload.
-            event_id: UUIDv4 idempotency key.
-            expected_event_seq: Optimistic-concurrency check.
-
-        Returns:
-            The appended ``Event``.
-
-        Raises:
-            SubstrateError: ``WORK_ITEM_NOT_FOUND``,
-                ``TRANSITION_VIA_APPEND_BLOCKED``,
-                ``IDEMPOTENCY_COLLISION_WITH_DIFFERENT_PAYLOAD``,
-                ``CONCURRENT_MODIFICATION``.
-        """
-        timer = OpTimer(self._project, "append_event")
-        try:
-            if event_id is None:
-                event_id = uuid.uuid4()
-            _validate_mutation_params(
-                actor_id=actor_id,
-                actor_kind=actor_kind,
-                event_id=event_id,
-            )
-
-            with self._mgr.transaction() as conn:
-                wi_row = conn.execute(
-                    "SELECT workflow_name, workflow_version FROM work_items_current "
-                    "WHERE work_item_id = %s",
-                    [work_item_id],
-                ).fetchone()
-                if wi_row is None:
-                    raise SubstrateError(
-                        ErrorCode.WORK_ITEM_NOT_FOUND,
-                        f"Work item {work_item_id} not found",
-                    )
-
-                if transition is not None:
-                    _check_reserved_transition(transition)
-                    wf_data = conn.execute(
-                        "SELECT definition FROM workflow_registry "
-                        "WHERE workflow_name = %s AND version = %s",
-                        [wi_row["workflow_name"], wi_row["workflow_version"]],
-                    ).fetchone()
-                    if wf_data is not None:
-                        _check_append_blocked(
-                            wf_data["definition"].get("transitions", []),
-                            transition,
-                            wi_row["workflow_name"],
-                        )
-
-                store = _PostgresEventStore(conn, self._keys)
-                evt = _store_append_event(
-                    store,
-                    work_item_id=work_item_id,
-                    actor_id=actor_id,
-                    actor_kind=actor_kind,
-                    actor_metadata=_Jsonb(actor_metadata) if actor_metadata is not None else None,
-                    workflow_name=wi_row["workflow_name"],
-                    workflow_version=wi_row["workflow_version"],
-                    transition=transition,
-                    payload=_Jsonb(payload) if payload is not None else None,
-                    event_id=event_id,
-                    expected_event_seq=expected_event_seq,
-                    key_set=self._keys,
-                )
-
-            self._metrics.inc("events_appended", self._project)
-            timer.log("ok", work_item_id=str(work_item_id))
-            return evt
-        except SubstrateError as e:
-            if e.code == ErrorCode.CONCURRENT_MODIFICATION:
-                self._metrics.inc("expected_seq_mismatches", self._project)
-            timer.log("rejected", work_item_id=str(work_item_id))
-            raise
+        return _impl(
+            self._mgr, self._keys, self._metrics, self._project,
+            workflow_name, work_item_type, actor_id, actor_kind,
+            actor_metadata,
+            custom_fields=custom_fields,
+            not_before=not_before,
+            event_id=event_id,
+        )
 
     def transition(
         self,
@@ -715,6 +510,54 @@ class Substrate:
             expected_event_seq=expected_event_seq,
         )
 
+    def append_event(
+        self,
+        work_item_id: uuid.UUID,
+        actor_id: str,
+        actor_kind: str = "agent",
+        actor_metadata: dict | None = None,
+        *,
+        transition: str | None = None,
+        payload: dict | None = None,
+        event_id: uuid.UUID | None = None,
+        expected_event_seq: int | None = None,
+    ) -> Event:
+        """Append a free-form event to the work-item log.
+
+        Rejects transitions that match a workflow-defined transition name — use
+        ``transition()`` for state changes.
+
+        Args:
+            work_item_id: Target work item.
+            actor_id: Authenticated actor.
+            actor_kind: ``"agent"`` | ``"human"`` | ``"system"``.
+            actor_metadata: Optional JSONB metadata.
+            transition: Free-form transition label (must not collide with workflow).
+            payload: Optional JSONB payload.
+            event_id: UUIDv4 idempotency key.
+            expected_event_seq: Optimistic-concurrency check.
+
+        Returns:
+            The appended ``Event``.
+
+        Raises:
+            SubstrateError: ``WORK_ITEM_NOT_FOUND``,
+                ``TRANSITION_VIA_APPEND_BLOCKED``,
+                ``IDEMPOTENCY_COLLISION_WITH_DIFFERENT_PAYLOAD``,
+                ``CONCURRENT_MODIFICATION``.
+        """
+        from ._events_api import append_event as _impl
+
+        return _impl(
+            self._mgr, self._keys, self._metrics, self._project,
+            work_item_id, actor_id, actor_kind,
+            actor_metadata=actor_metadata,
+            transition=transition,
+            payload=payload,
+            event_id=event_id,
+            expected_event_seq=expected_event_seq,
+        )
+
     def read_events(
         self,
         *,
@@ -752,20 +595,18 @@ class Substrate:
         Raises:
             SubstrateError: ``INVALID_FILTER``.
         """
-        _validate_read_events_filters(before_seq, work_item_id, start, end)
-        from ._events import read_events_composite
+        from ._events_api import read_events as _impl
 
-        with self._mgr.transaction() as conn:
-            return read_events_composite(
-                conn,
-                work_item_id=work_item_id,
-                actor_id=actor_id,
-                start=start,
-                end=end,
-                transition=transition,
-                limit=limit,
-                before_seq=before_seq,
-            )
+        return _impl(
+            self._mgr,
+            work_item_id=work_item_id,
+            actor_id=actor_id,
+            start=start,
+            end=end,
+            transition=transition,
+            limit=limit,
+            before_seq=before_seq,
+        )
 
     def read_events_since(
         self,
@@ -789,10 +630,9 @@ class Substrate:
         Returns:
             Events in ascending ``event_seq`` order.
         """
-        from ._events import read_events_by_work_item as _read
+        from ._events_api import read_events_since as _impl
 
-        with self._mgr.transaction() as conn:
-            return _read(conn, work_item_id, limit=limit, after_seq=after_seq)
+        return _impl(self._mgr, work_item_id, after_seq, limit=limit)
 
     def query_work_items(
         self,
@@ -830,23 +670,22 @@ class Substrate:
         Returns:
             ``QueryPage[WorkItem]`` with cursor for the next page.
         """
-        from ._work_items import query_work_items as _query
+        from ._work_items_api import query_work_items as _impl
 
-        with self._mgr.transaction() as conn:
-            return _query(
-                conn,
-                workflow_name=workflow_name,
-                workflow_version=workflow_version,
-                work_item_types=work_item_types,
-                current_states=current_states,
-                claimed_by=claimed_by,
-                claimable_now=claimable_now,
-                needs_review=needs_review,
-                has_link_type=has_link_type,
-                custom_field_filters=custom_field_filters,
-                cursor=cursor,
-                page_size=page_size,
-            )
+        return _impl(
+            self._mgr,
+            workflow_name=workflow_name,
+            workflow_version=workflow_version,
+            work_item_types=work_item_types,
+            current_states=current_states,
+            claimed_by=claimed_by,
+            claimable_now=claimable_now,
+            needs_review=needs_review,
+            has_link_type=has_link_type,
+            custom_field_filters=custom_field_filters,
+            cursor=cursor,
+            page_size=page_size,
+        )
 
     def get_work_item(self, work_item_id: uuid.UUID) -> WorkItem | None:
         """Retrieve a single work item by ID.
@@ -854,10 +693,9 @@ class Substrate:
         Returns:
             The ``WorkItem`` or ``None`` if not found.
         """
-        from ._work_items import get_work_item as _get
+        from ._work_items_api import get_work_item as _impl
 
-        with self._mgr.transaction() as conn:
-            return _get(conn, work_item_id)
+        return _impl(self._mgr, work_item_id)
 
     def acquire_claim(
         self,

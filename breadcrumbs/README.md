@@ -31,9 +31,7 @@ _(none)_
 
 ## Open
 
-| # | Title | Severity | Kind |
-|---|---|---|---|---|
-| 183 | __init__.py and _in_memory.py still exceed 1300 lines — need further decomposition | medium | improvement |
+_(none)_
 
 ## Resolved
 
