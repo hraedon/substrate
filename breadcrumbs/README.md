@@ -31,7 +31,17 @@ _(none)_
 
 ## Open
 
-_(none)_
+| # | Title | Severity | Kind |
+|---|---|---|---|
+| 172 | rfc8785 library is critical single point of failure for signature integrity | medium | design |
+| 173 | No forced TLS enforcement on Postgres connections | medium | improvement |
+| 174 | Unknown key status silently skipped — typo drops keys from rotation | low | bug |
+| 175 | Sidecar API docs (Swagger UI, OpenAPI) publicly accessible without auth | low | improvement |
+| 176 | Sidecar sole-signer middleware only checks POST method | low | bug |
+| 177 | No actor_id length limit — TEXT column permits ~1GB values | low | improvement |
+| 178 | Sidecar sole-signer middleware reassembles body from stream with no size limit | low | improvement |
+| 179 | _move_to_dead_letter's append_event has no atomicity with work-item state | low | bug |
+| 180 | HMAC secrets stored as plaintext in key files — no encrypted/KMS support | medium | improvement |
 
 ## Resolved
 
