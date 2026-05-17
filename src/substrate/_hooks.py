@@ -343,23 +343,57 @@ def _move_to_dead_letter(
     ).fetchone()
 
     if evt_row is not None:
-        append_event(
-            conn=conn,
-            work_item_id=evt_row["work_item_id"],
-            actor_id="system",
-            actor_kind="system",
-            actor_metadata=None,
-            key_set=key_set,
-            workflow_name=evt_row["workflow_name"],
-            workflow_version=evt_row["workflow_version"],
-            transition="hook_dead_lettered",
-            payload=Jsonb({
-                "hook_name": hook_row["hook_name"],
-                "hook_queue_id": hook_row["id"],
-                "error_message": error_message,
-            }),
-            event_id=uuid.uuid4(),
-        )
+        work_item_id = evt_row["work_item_id"]
+        workflow_name = evt_row["workflow_name"]
+        workflow_version = evt_row["workflow_version"]
+    else:
+        work_item_id = None
+        payload = hook_row.get("payload") or {}
+        raw_wi = payload.get("work_item_id")
+        if raw_wi is not None:
+            try:
+                work_item_id = uuid.UUID(raw_wi)
+            except ValueError:
+                work_item_id = None
+        if work_item_id is not None:
+            wi_row = conn.execute(
+                SQL(
+                    "SELECT workflow_name, workflow_version FROM work_items_current "
+                    "WHERE work_item_id = %s"
+                ),
+                [work_item_id],
+            ).fetchone()
+            if wi_row is not None:
+                workflow_name = wi_row["workflow_name"]
+                workflow_version = wi_row["workflow_version"]
+            else:
+                work_item_id = None
+        if work_item_id is None:
+            log.warning(
+                "hooks.dead_letter_audit_gap",
+                hook_queue_id=hook_row["id"],
+                event_id=str(hook_row["event_id"]),
+                reason="original_event_missing",
+            )
+            return
+
+    append_event(
+        conn=conn,
+        work_item_id=work_item_id,
+        actor_id="system",
+        actor_kind="system",
+        actor_metadata=None,
+        key_set=key_set,
+        workflow_name=workflow_name,
+        workflow_version=workflow_version,
+        transition="hook_dead_lettered",
+        payload=Jsonb({
+            "hook_name": hook_row["hook_name"],
+            "hook_queue_id": hook_row["id"],
+            "error_message": error_message,
+        }),
+        event_id=uuid.uuid4(),
+    )
 
 
 def requeue_dead_lettered_hook(

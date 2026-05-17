@@ -43,10 +43,12 @@ class ConnectionManager:
         pool_min: int = 1,
         pool_max: int = 10,
         pool_max_lifetime: float | None = None,
+        require_ssl: bool = False,
     ) -> None:
         self._dsn = dsn
         self._schema = validate_project_name(project)
         self._project = project
+        self._require_ssl = require_ssl
         kwargs: dict = {"row_factory": dict_row}
         pool_kwargs: dict = {
             "min_size": pool_min,
@@ -71,6 +73,20 @@ class ConnectionManager:
     def schema(self) -> str:
         return self._schema
 
+    def _verify_ssl(self, conn: psycopg.Connection) -> None:
+        if not self._require_ssl:
+            return
+        row = conn.execute(
+            "SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()"
+        ).fetchone()
+        using_ssl = bool(row is not None and row["ssl"] is True)
+        if not using_ssl:
+            raise SubstrateError(
+                ErrorCode.INVALID_ARGUMENT,
+                "SSL is required for this connection but not active. "
+                "Set sslmode=require or sslmode=verify-full in the DSN.",
+            )
+
     def open(self) -> None:
         self._pool.open()
 
@@ -80,11 +96,13 @@ class ConnectionManager:
     @contextmanager
     def connect(self) -> Generator[psycopg.Connection, None, None]:
         with self._pool.connection() as conn:
+            self._verify_ssl(conn)
             yield conn
 
     @contextmanager
     def transaction(self) -> Generator[psycopg.Connection, None, None]:
         with self._pool.connection() as conn:
+            self._verify_ssl(conn)
             with conn.transaction():
                 conn.execute(
                     SQL("SET LOCAL search_path TO {}").format(
@@ -95,6 +113,7 @@ class ConnectionManager:
 
     def schema_exists(self) -> bool:
         with self._pool.connection() as conn:
+            self._verify_ssl(conn)
             row = conn.execute(
                 "SELECT 1 FROM information_schema.schemata WHERE schema_name = %s",
                 [self._schema],
@@ -103,6 +122,7 @@ class ConnectionManager:
 
     def create_schema(self) -> None:
         with self._pool.connection() as conn:
+            self._verify_ssl(conn)
             conn.execute(
                 SQL("CREATE SCHEMA IF NOT EXISTS {}").format(
                     Identifier(self._schema)

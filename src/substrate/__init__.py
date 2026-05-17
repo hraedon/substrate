@@ -91,6 +91,7 @@ class Substrate:
         pool_min: int = 1,
         pool_max: int = 10,
         pool_max_lifetime: float | None = None,
+        require_ssl: bool = False,
         prometheus_registry=None,
     ) -> None:
         """Connect to an existing project.
@@ -102,7 +103,8 @@ class Substrate:
             pool_min: Minimum connection-pool size.
             pool_max: Maximum connection-pool size.
             pool_max_lifetime: Maximum connection lifetime in seconds.
-            prometheus_registry: Optional ``prometheus_client.CollectorRegistry``.
+            require_ssl: Reject the connection if SSL is not active.
+        prometheus_registry: Optional ``prometheus_client.CollectorRegistry``.
 
         Raises:
             SubstrateError: If migrations are pending or workflow versions are
@@ -115,7 +117,7 @@ class Substrate:
             )
         self._mgr = ConnectionManager(
             dsn, project, pool_min=pool_min, pool_max=pool_max,
-            pool_max_lifetime=pool_max_lifetime,
+            pool_max_lifetime=pool_max_lifetime, require_ssl=require_ssl,
         )
         try:
             self._mgr.open()
@@ -153,6 +155,7 @@ class Substrate:
         pool_min: int = 1,
         pool_max: int = 10,
         pool_max_lifetime: float | None = None,
+        require_ssl: bool = False,
         prometheus_registry=None,
     ) -> Substrate:
         """Create a new project: schema, migrations, and return a connected handle.
@@ -171,7 +174,7 @@ class Substrate:
         """
         mgr = ConnectionManager(
             dsn, project, pool_min=pool_min, pool_max=pool_max,
-            pool_max_lifetime=pool_max_lifetime,
+            pool_max_lifetime=pool_max_lifetime, require_ssl=require_ssl,
         )
         try:
             mgr.open()
@@ -187,6 +190,7 @@ class Substrate:
             pool_min=pool_min,
             pool_max=pool_max,
             pool_max_lifetime=pool_max_lifetime,
+            require_ssl=require_ssl,
             prometheus_registry=prometheus_registry,
         )
 

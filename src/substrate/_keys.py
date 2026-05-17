@@ -79,6 +79,7 @@ class KeySet:
         self._active_key_id = new_active
         self._last_mtime = self._path.stat().st_mtime
         self._last_check = time.monotonic()
+        log.warning("keys.plaintext_at_rest", path=str(self._path))
         log.info(
             "keys.loaded",
             path=str(self._path),

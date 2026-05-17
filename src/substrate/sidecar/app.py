@@ -27,12 +27,25 @@ def create_app(
         openapi_url=openapi_url,
     )
 
+    max_body_size = 10 * 1024 * 1024
+
     @app.middleware("http")
     async def sole_signer_middleware(request: Request, call_next):
         if request.method in ("POST", "PUT", "PATCH") and request.url.path.startswith("/v1"):
             body_bytes = b""
             async for chunk in request.stream():
                 body_bytes += chunk
+                if len(body_bytes) > max_body_size:
+                    return JSONResponse(
+                        status_code=413,
+                        content={
+                            "error": {
+                                "code": "INVALID_ARGUMENT",
+                                "message": "Payload too large",
+                                "detail": None,
+                            }
+                        },
+                    )
             request._body = body_bytes
             if body_bytes:
                 try:

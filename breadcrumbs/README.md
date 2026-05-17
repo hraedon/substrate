@@ -34,15 +34,16 @@ _(none)_
 | # | Title | Severity | Kind |
 |---|---|---|---|---|
 | 183 | __init__.py and _in_memory.py still exceed 1300 lines — need further decomposition | medium | improvement |
-| 173 | No forced TLS enforcement on Postgres connections | medium | improvement |
-| 178 | Sidecar sole-signer middleware reassembles body from stream with no size limit | low | improvement |
-| 179 | _move_to_dead_letter's append_event has no atomicity with work-item state | low | bug |
-| 180 | HMAC secrets stored as plaintext in key files — no encrypted/KMS support | medium | improvement |
 
 ## Resolved
 
 | # | Title | Severity | Resolution |
-|---|---|---|---|
+|---|---|---|---|---|
+| 180 | HMAC secrets stored as plaintext in key files — no encrypted/KMS support | medium | Added `log.warning("keys.plaintext_at_rest", ...)` on every `KeySet._load()`. Environment-variable key injection deferred to future session. |
+| 179 | _move_to_dead_letter's append_event has no atomicity with work-item state | low | Fall back to `hook_queue.payload.work_item_id` when `events` row is missing (partition drop / orphan), then resolve `workflow_name`/`workflow_version` from `work_items_current`. Only skips event when work-item itself is gone, logging a warning. |
+| 178 | Sidecar sole-signer middleware reassembles body from stream with no size limit | low | Added `max_body_size = 10MB` guard in `sole_signer_middleware`; returns HTTP 413 when exceeded. Tested with 11MB payload. |
+| 173 | No forced TLS enforcement on Postgres connections | medium | Added `require_ssl: bool = False` to `ConnectionManager.__init__`, `Substrate.__init__`, and `Substrate.create_project`. `_verify_ssl()` checks `pg_stat_ssl` on every connection acquisition; raises `INVALID_ARGUMENT` if SSL required but inactive. Added `tests/test_connection_ssl.py`. |
+| 172 | rfc8785 library is critical single point of failure for signature integrity | medium | Pinned `rfc8785==0.1.4` in `pyproject.toml` (was `>=0.1.4`). Vendoring / cross-validation deferred to future session. |
 | 170 | `register_workflow_file` double-reads file when no `extends:` | low | Hoisted `raw_text = p.read_text()` before the branch; single read in both backends. |
 | 171 | `work_item_ref` fields cannot declare multiple allowed target_work_item_types | low | Added `target_work_item_types: list[str]` to `CustomFieldDef`; both-present (singular + plural) rejected at registration; plural form validated at runtime in Postgres and InMemory backends. JSON Schema updated. 9 new tests. |
 | 169 | Sidecar `fire_recurrence`/`cancel_recurrence_rule`/`requeue_dead_lettered_hook` use raw `dict` body — no input validation | high | Created typed Pydantic models (`FireRecurrenceRequest`, `RequeueDeadLetteredHookRequest`); added `rule_id` to `CancelRecurrenceRuleRequest`; updated routes. |
