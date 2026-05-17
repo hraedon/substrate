@@ -325,6 +325,7 @@ class InMemorySubstrate:
             event_id = uuid.uuid4()
         if not skip_event_id_version_check:
             validate_mutation_params(
+                actor_id=actor_id,
                 actor_kind=actor_kind,
                 event_id=event_id,
                 not_before=not_before,
@@ -434,6 +435,7 @@ class InMemorySubstrate:
         if event_id is None:
             event_id = uuid.uuid4()
         validate_mutation_params(
+            actor_id=actor_id,
             actor_kind=actor_kind,
             event_id=event_id,
         )
@@ -482,12 +484,12 @@ class InMemorySubstrate:
         if event_id is None:
             event_id = uuid.uuid4()
         validate_mutation_params(
+            actor_id=actor_id,
             actor_kind=actor_kind,
             event_id=event_id,
         )
 
         wi = self._work_items.get(work_item_id)
-        validate_work_item_exists(wi, work_item_id)
 
         wf_key = (wi["workflow_name"], wi["workflow_version"])
         wf_data = self._workflows.get(wf_key)
@@ -703,6 +705,7 @@ class InMemorySubstrate:
         actor_kind: str = "agent",
     ) -> Claim:
         validate_mutation_params(
+            actor_id=actor_id,
             actor_kind=actor_kind,
             event_id=event_id,
             ttl_seconds=ttl_seconds,
@@ -766,7 +769,7 @@ class InMemorySubstrate:
         *,
         expected_attempt_number: int | None = None,
     ) -> Claim:
-        validate_mutation_params(ttl_seconds=ttl_seconds)
+        validate_mutation_params(actor_id=actor_id, ttl_seconds=ttl_seconds)
         now = datetime.now(UTC)
         claim = self._claims.get(work_item_id)
         claim_state = claim if claim is not None else None
@@ -802,6 +805,7 @@ class InMemorySubstrate:
         actor_kind: str = "agent",
     ) -> None:
         validate_mutation_params(
+            actor_id=actor_id,
             actor_kind=actor_kind,
             event_id=event_id,
         )
@@ -858,6 +862,7 @@ class InMemorySubstrate:
         if event_id is None:
             event_id = uuid.uuid4()
         validate_mutation_params(
+            actor_id=actor_id,
             actor_kind=actor_kind,
             event_id=event_id,
         )
@@ -930,6 +935,7 @@ class InMemorySubstrate:
         if event_id is None:
             event_id = uuid.uuid4()
         validate_mutation_params(
+            actor_id=actor_id,
             actor_kind=actor_kind,
             event_id=event_id,
         )
@@ -1187,6 +1193,7 @@ class InMemorySubstrate:
         if event_id is None:
             event_id = uuid.uuid4()
         validate_mutation_params(
+            actor_id=actor_id,
             actor_kind=actor_kind,
             event_id=event_id,
             not_before=not_before,
@@ -1212,6 +1219,9 @@ class InMemorySubstrate:
         return evt
 
     def register_actor_role(self, actor_id: str, role: str) -> None:
+        from ._contract import validate_actor_id
+
+        validate_actor_id(actor_id)
         key = (actor_id, role)
         if key in self._actor_roles:
             return
@@ -1219,6 +1229,9 @@ class InMemorySubstrate:
         self._actor_role_created[key] = datetime.now(UTC)
 
     def unregister_actor_role(self, actor_id: str, role: str) -> None:
+        from ._contract import validate_actor_id
+
+        validate_actor_id(actor_id)
         key = (actor_id, role)
         if key not in self._actor_roles:
             raise SubstrateError(

@@ -534,6 +534,7 @@ class Substrate:
         timer = OpTimer(self._project, "create_work_item")
         try:
             _validate_mutation_params(
+                actor_id=actor_id,
                 actor_kind=actor_kind,
                 event_id=event_id,
                 not_before=not_before,
@@ -603,6 +604,7 @@ class Substrate:
             if event_id is None:
                 event_id = uuid.uuid4()
             _validate_mutation_params(
+                actor_id=actor_id,
                 actor_kind=actor_kind,
                 event_id=event_id,
             )
@@ -882,36 +884,17 @@ class Substrate:
                 ``WORK_ITEM_NOT_FOUND``, ``INVALID_ARGUMENT``.
         """
         _validate_mutation_params(
+            actor_id=actor_id,
             actor_kind=actor_kind,
             event_id=event_id,
             ttl_seconds=ttl_seconds,
         )
-        from ._claims import acquire_claim as _acquire
-
-        timer = OpTimer(self._project, "acquire_claim")
-        try:
-            with self._mgr.transaction() as conn:
-                claim, escalated, stolen = _acquire(
-                    conn, work_item_id, actor_id, ttl_seconds,
-                    self._keys, event_id, actor_kind,
-                )
-
-            self._metrics.inc("claims_acquired", self._project)
-
-            if stolen:
-                self._metrics.inc("claims_stolen", self._project)
-
-            if escalated:
-                self._metrics.inc("escalations", self._project)
-
-            timer.log("ok", work_item_id=str(work_item_id))
-            return claim
-        except SubstrateError as e:
-            if e.code == ErrorCode.CLAIM_CONTESTED:
-                timer.log("rejected", work_item_id=str(work_item_id))
-            else:
-                timer.log("error")
-            raise
+        from ._claims_api import acquire_claim as _impl
+        return _impl(
+            self._mgr, self._keys, self._metrics, self._project,
+            work_item_id, actor_id, ttl_seconds,
+            event_id=event_id, actor_kind=actor_kind,
+        )
 
     def heartbeat_claim(
         self,
@@ -936,22 +919,13 @@ class Substrate:
             SubstrateError: ``CLAIM_LOST``, ``CLAIM_NOT_FOUND``,
                 ``INVALID_ARGUMENT``.
         """
-        _validate_mutation_params(ttl_seconds=ttl_seconds)
-        from ._claims import heartbeat_claim as _heartbeat
-
-        timer = OpTimer(self._project, "heartbeat_claim")
-        try:
-            with self._mgr.transaction() as conn:
-                claim = _heartbeat(
-                    conn, work_item_id, actor_id, ttl_seconds,
-                    expected_attempt_number=expected_attempt_number,
-                )
-
-            timer.log("ok", work_item_id=str(work_item_id))
-            return claim
-        except SubstrateError:
-            timer.log("error")
-            raise
+        _validate_mutation_params(actor_id=actor_id, ttl_seconds=ttl_seconds)
+        from ._claims_api import heartbeat_claim as _impl
+        return _impl(
+            self._mgr, self._project,
+            work_item_id, actor_id, ttl_seconds,
+            expected_attempt_number=expected_attempt_number,
+        )
 
     def release_claim(
         self,
@@ -973,21 +947,16 @@ class Substrate:
             SubstrateError: ``CLAIM_LOST``, ``CLAIM_NOT_FOUND``.
         """
         _validate_mutation_params(
+            actor_id=actor_id,
             actor_kind=actor_kind,
             event_id=event_id,
         )
-        from ._claims import release_claim as _release
-
-        timer = OpTimer(self._project, "release_claim")
-        try:
-            with self._mgr.transaction() as conn:
-                _release(conn, work_item_id, actor_id, self._keys, event_id, actor_kind)
-
-            self._metrics.inc("claims_released", self._project)
-            timer.log("ok", work_item_id=str(work_item_id))
-        except SubstrateError:
-            timer.log("error")
-            raise
+        from ._claims_api import release_claim as _impl
+        _impl(
+            self._mgr, self._keys, self._metrics, self._project,
+            work_item_id, actor_id,
+            event_id=event_id, actor_kind=actor_kind,
+        )
 
     def sweep_expired_claims(self) -> int:
         """Delete all expired claims and emit ``claim_expired`` events.
@@ -995,12 +964,8 @@ class Substrate:
         Returns:
             Number of expired claims swept.
         """
-        from ._claims import sweep_expired_claims as _sweep
-
-        with self._mgr.transaction() as conn:
-            count = _sweep(conn, self._keys)
-        self._metrics.inc("claims_expired", self._project, amount=count)
-        return count
+        from ._claims_api import sweep_expired_claims as _impl
+        return _impl(self._mgr, self._keys, self._metrics, self._project)
 
     def create_link(
         self,
@@ -1033,34 +998,18 @@ class Substrate:
             SubstrateError: ``LINK_TYPE_NOT_ALLOWED``,
                 ``LINK_TARGET_NOT_FOUND``, ``LINK_CROSS_PROJECT``.
         """
-        from ._links import create_link as _create
-
-        timer = OpTimer(self._project, "create_link")
-        try:
-            _validate_mutation_params(
-                actor_kind=actor_kind,
-                event_id=event_id,
-            )
-            with self._mgr.transaction() as conn:
-                link = _create(
-                    conn,
-                    from_work_item_id=from_work_item_id,
-                    to_work_item_id=to_work_item_id,
-                    link_type=link_type,
-                    actor_id=actor_id,
-                    actor_kind=actor_kind,
-                    actor_metadata=_Jsonb(actor_metadata) if actor_metadata is not None else None,
-                    key_set=self._keys,
-                    event_id=event_id,
-                    payload=_Jsonb(payload) if payload is not None else None,
-                )
-
-            self._metrics.inc("links_created", self._project)
-            timer.log("ok")
-            return link
-        except SubstrateError:
-            timer.log("error")
-            raise
+        _validate_mutation_params(
+            actor_id=actor_id,
+            actor_kind=actor_kind,
+            event_id=event_id,
+        )
+        from ._links_api import create_link as _impl
+        return _impl(
+            self._mgr, self._keys, self._metrics, self._project,
+            from_work_item_id, to_work_item_id, link_type,
+            actor_id, actor_kind, actor_metadata,
+            event_id=event_id, payload=payload,
+        )
 
     def remove_link(
         self,
@@ -1087,32 +1036,18 @@ class Substrate:
         Raises:
             SubstrateError: ``LINK_NOT_FOUND``.
         """
-        from ._links import remove_link as _remove
-
-        timer = OpTimer(self._project, "remove_link")
-        try:
-            _validate_mutation_params(
-                actor_kind=actor_kind,
-                event_id=event_id,
-            )
-            with self._mgr.transaction() as conn:
-                _remove(
-                    conn,
-                    from_work_item_id=from_work_item_id,
-                    to_work_item_id=to_work_item_id,
-                    link_type=link_type,
-                    actor_id=actor_id,
-                    actor_kind=actor_kind,
-                    actor_metadata=_Jsonb(actor_metadata) if actor_metadata is not None else None,
-                    key_set=self._keys,
-                    event_id=event_id,
-                )
-
-            self._metrics.inc("links_removed", self._project)
-            timer.log("ok")
-        except SubstrateError:
-            timer.log("error")
-            raise
+        _validate_mutation_params(
+            actor_id=actor_id,
+            actor_kind=actor_kind,
+            event_id=event_id,
+        )
+        from ._links_api import remove_link as _impl
+        _impl(
+            self._mgr, self._keys, self._metrics, self._project,
+            from_work_item_id, to_work_item_id, link_type,
+            actor_id, actor_kind, actor_metadata,
+            event_id=event_id,
+        )
 
     def replay(self, *, continue_on_revoked: bool = False) -> ReplayReport:
         """Rebuild projection from the event log and compare with live state.
@@ -1305,6 +1240,9 @@ class Substrate:
 
         Duplicate registrations are silently idempotent.
         """
+        from ._contract import validate_actor_id as _validate_actor_id
+
+        _validate_actor_id(actor_id)
         from ._actor_roles import register_actor_role as _register
 
         timer = OpTimer(self._project, "register_actor_role")
@@ -1326,6 +1264,9 @@ class Substrate:
         Raises:
             SubstrateError: ``ACTOR_ROLE_NOT_REGISTERED``.
         """
+        from ._contract import validate_actor_id as _validate_actor_id
+
+        _validate_actor_id(actor_id)
         from ._actor_roles import unregister_actor_role as _unregister
 
         timer = OpTimer(self._project, "unregister_actor_role")

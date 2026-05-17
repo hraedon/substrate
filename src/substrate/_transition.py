@@ -45,6 +45,7 @@ def transition(
     if event_id is None:
         event_id = uuid.uuid4()
     _validate_mutation_params(
+        actor_id=actor_id,
         actor_kind=actor_kind,
         event_id=event_id,
     )

@@ -32,13 +32,9 @@ _(none)_
 ## Open
 
 | # | Title | Severity | Kind |
-|---|---|---|---|
-| 172 | rfc8785 library is critical single point of failure for signature integrity | medium | design |
+|---|---|---|---|---|
+| 183 | __init__.py and _in_memory.py still exceed 1300 lines — need further decomposition | medium | improvement |
 | 173 | No forced TLS enforcement on Postgres connections | medium | improvement |
-| 174 | Unknown key status silently skipped — typo drops keys from rotation | low | bug |
-| 175 | Sidecar API docs (Swagger UI, OpenAPI) publicly accessible without auth | low | improvement |
-| 176 | Sidecar sole-signer middleware only checks POST method | low | bug |
-| 177 | No actor_id length limit — TEXT column permits ~1GB values | low | improvement |
 | 178 | Sidecar sole-signer middleware reassembles body from stream with no size limit | low | improvement |
 | 179 | _move_to_dead_letter's append_event has no atomicity with work-item state | low | bug |
 | 180 | HMAC secrets stored as plaintext in key files — no encrypted/KMS support | medium | improvement |
@@ -211,4 +207,13 @@ _(none)_
 | 004 | Idempotency silently accepts different payloads under same event_id | medium | [resolved/004](resolved/004-idempotency-silent-mismatch.md) |
 | 003 | Drift detection compares only current_state and last_event_seq | high | [resolved/003](resolved/003-drift-detection-incomplete.md) |
 | 002 | Replay output table contains live snapshot, not derived state | medium | [resolved/002](resolved/002-replay-table-live-snapshot.md) |
+| 182 | TokenRegistry.from_file crashes on malformed YAML — unhandled KeyError / TypeError | low | [resolved/182](resolved/182-token-registry-unhandled-errors.md) |
+| 181 | register_actor_role / unregister_actor_role bypass actor_id validation | low | [resolved/181](resolved/181-actor-role-methods-bypass-actor-id-validation.md) |
+| 180 | HMAC secrets stored as plaintext in key files — no encrypted/KMS support | medium | [resolved/180](resolved/180-plaintext-hmac-secrets-at-rest-in-key-files.md) |
+| 179 | _move_to_dead_letter's append_event has no atomicity with work-item state | low | [resolved/179](resolved/179-move-to-dead-letter-append-event-no-atomicity.md) |
+| 178 | Sidecar sole-signer middleware reassembles body from stream with no size limit | low | [resolved/178](resolved/178-sidecar-sole-signer-no-body-size-limit.md) |
+| 177 | No actor_id length limit — TEXT column permits ~1GB values | low | [resolved/177](resolved/177-no-actor-id-length-limit.md) |
+| 176 | Sidecar sole-signer middleware only checks POST method | low | [resolved/176](resolved/176-sidecar-sole-signer-middleware-only-checks-post.md) |
+| 175 | Sidecar API docs (Swagger UI, OpenAPI) publicly accessible without auth | low | [resolved/175](resolved/175-sidecar-api-docs-exposed-without-auth.md) |
+| 174 | Unknown key status silently skipped — typo drops keys from rotation | low | [resolved/174](resolved/174-unknown-key-status-silently-skipped.md) |
 | 001 | Replay does not verify signatures or check key status | high | [resolved/001](resolved/001-replay-no-signature-verification.md) |

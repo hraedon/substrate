@@ -6,6 +6,8 @@ from pathlib import Path
 
 import yaml
 
+from substrate._errors import ErrorCode, SubstrateError
+
 
 @dataclass(frozen=True)
 class AuthenticatedActor:
@@ -22,10 +24,37 @@ class TokenRegistry:
     def from_file(cls, path: str | Path) -> TokenRegistry:
         reg = cls()
         data = yaml.safe_load(Path(path).read_text())
-        for entry in data.get("tokens", []):
-            token_sha256 = entry["token_sha256"]
+        if not isinstance(data, dict):
+            raise SubstrateError(
+                ErrorCode.INVALID_ARGUMENT,
+                f"Token file {path} must contain a top-level YAML mapping",
+            )
+        tokens = data.get("tokens")
+        if not isinstance(tokens, list):
+            raise SubstrateError(
+                ErrorCode.INVALID_ARGUMENT,
+                f"Token file {path} must contain a 'tokens' list",
+            )
+        for entry in tokens:
+            if not isinstance(entry, dict):
+                raise SubstrateError(
+                    ErrorCode.INVALID_ARGUMENT,
+                    f"Token file {path} contains non-dict entry in tokens list",
+                )
+            token_sha256 = entry.get("token_sha256")
+            actor_id = entry.get("actor_id")
+            if not isinstance(token_sha256, str):
+                raise SubstrateError(
+                    ErrorCode.INVALID_ARGUMENT,
+                    f"Token file entry missing 'token_sha256' string in {path}",
+                )
+            if not isinstance(actor_id, str):
+                raise SubstrateError(
+                    ErrorCode.INVALID_ARGUMENT,
+                    f"Token file entry missing 'actor_id' string in {path}",
+                )
             actor = AuthenticatedActor(
-                actor_id=entry["actor_id"],
+                actor_id=actor_id,
                 actor_kind=entry.get("actor_kind", "agent"),
                 allowed_roles=entry.get("allowed_roles", []),
             )

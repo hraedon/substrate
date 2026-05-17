@@ -335,6 +335,22 @@ class TestActorRoles:
         assert resp.status_code == 200
 
 
+class TestApiDocs:
+    def test_docs_disabled(self, substrate_instance, token_file):
+        token_path, _ = token_file
+        from substrate.sidecar.app import create_app
+        from substrate.sidecar.auth import TokenRegistry
+
+        tokens = TokenRegistry.from_file(token_path)
+        app = create_app(substrate_instance, tokens, docs_url=None, openapi_url=None)
+        client2 = TestClient(app)
+        assert client2.get("/docs").status_code == 404
+        assert client2.get("/openapi.json").status_code == 404
+
+    def test_docs_enabled_by_default(self, client):
+        assert client.get("/docs").status_code == 200
+
+
 class TestNoValidatorOverHttp:
     def test_no_register_validator_route(self, client, auth_headers):
         resp = client.post(

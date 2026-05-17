@@ -8,6 +8,8 @@ from typing import Literal
 from ._errors import ErrorCode, SubstrateError
 from ._types import Event
 
+MAX_ACTOR_ID_LENGTH = 255
+
 _VALID_ACTOR_KINDS = frozenset({"agent", "human", "system"})
 
 _RESERVED_TRANSITIONS = frozenset({
@@ -457,8 +459,18 @@ def _check_string_safe(value: str, label: str) -> None:
             )
 
 
+def validate_actor_id(actor_id: str) -> None:
+    if len(actor_id) > MAX_ACTOR_ID_LENGTH:
+        raise SubstrateError(
+            ErrorCode.INVALID_ARGUMENT,
+            f"actor_id exceeds maximum length of {MAX_ACTOR_ID_LENGTH} characters",
+            detail={"actor_id_length": len(actor_id), "max_length": MAX_ACTOR_ID_LENGTH},
+        )
+
+
 def validate_mutation_params(
     *,
+    actor_id: str | None = None,
     actor_kind: str | None = None,
     event_id: uuid.UUID | None = None,
     not_before: datetime | None = None,
@@ -471,6 +483,8 @@ def validate_mutation_params(
     parameters.  Centralising here prevents InMemory/Postgres
     divergence on input validation (GLM feedback, 2026-05-12).
     """
+    if actor_id is not None:
+        validate_actor_id(actor_id)
     if actor_kind is not None:
         validate_actor_kind(actor_kind)
     if event_id is not None:

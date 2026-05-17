@@ -13,17 +13,23 @@ from .routes import register_routes
 from .routes_hooks import register_hook_routes
 
 
-def create_app(substrate, tokens: TokenRegistry) -> FastAPI:
+def create_app(
+    substrate,
+    tokens: TokenRegistry,
+    *,
+    docs_url: str | None = "/docs",
+    openapi_url: str | None = "/openapi.json",
+) -> FastAPI:
     app = FastAPI(
         title="Substrate Sidecar",
         version="0.1.0",
-        docs_url="/docs",
-        openapi_url="/openapi.json",
+        docs_url=docs_url,
+        openapi_url=openapi_url,
     )
 
     @app.middleware("http")
     async def sole_signer_middleware(request: Request, call_next):
-        if request.method == "POST" and request.url.path.startswith("/v1"):
+        if request.method in ("POST", "PUT", "PATCH") and request.url.path.startswith("/v1"):
             body_bytes = b""
             async for chunk in request.stream():
                 body_bytes += chunk

@@ -16,6 +16,7 @@ from substrate._contract import (
     resolve_heartbeat,
     resolve_transition,
     should_escalate,
+    validate_actor_id,
     validate_actor_kind,
     validate_json_safe_value,
     validate_link_type,
@@ -609,6 +610,26 @@ class TestValidateJsonSafeValue:
         with pytest.raises(SubstrateError) as exc_info:
             validate_json_safe_value((1, 2), "test")
         assert exc_info.value.code == ErrorCode.INVALID_ARGUMENT
+
+
+class TestValidateActorId:
+    def test_short_passes(self):
+        validate_actor_id("a")
+
+    def test_exact_255_passes(self):
+        validate_actor_id("x" * 255)
+
+    def test_over_255_raises(self):
+        with pytest.raises(SubstrateError) as exc_info:
+            validate_actor_id("x" * 256)
+        assert exc_info.value.code == ErrorCode.INVALID_ARGUMENT
+        assert "255" in exc_info.value.message
+
+    def test_detail_includes_length(self):
+        with pytest.raises(SubstrateError) as exc_info:
+            validate_actor_id("y" * 300)
+        assert exc_info.value.detail is not None
+        assert exc_info.value.detail["actor_id_length"] == 300
 
 
 class TestValidateWorkItemExists:

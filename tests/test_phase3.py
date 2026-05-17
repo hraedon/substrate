@@ -135,6 +135,16 @@ class TestActorRoles:
         assert "detail-1" in str(exc_info.value)
         assert "agent" in str(exc_info.value)
 
+    def test_register_actor_role_rejects_overlong_actor_id(self, substrate):
+        long_id = "x" * 256
+        with pytest.raises(Exception, match="INVALID_ARGUMENT"):
+            substrate.register_actor_role(long_id, "agent")
+
+    def test_unregister_actor_role_rejects_overlong_actor_id(self, substrate):
+        long_id = "x" * 256
+        with pytest.raises(Exception, match="INVALID_ARGUMENT"):
+            substrate.unregister_actor_role(long_id, "agent")
+
 
 class TestContinueOnRevokedReplay:
     def test_replay_halts_on_revoked_without_flag(self, substrate):

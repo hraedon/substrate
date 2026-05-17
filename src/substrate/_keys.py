@@ -58,6 +58,11 @@ class KeySet:
             key_id = entry["key_id"]
             status = entry.get("status", "active")
             if status not in ("active", "deprecated", "revoked"):
+                log.warning(
+                    "keys.unknown_status",
+                    key_id=key_id,
+                    status=status,
+                )
                 continue
             secret = entry["secret"]
             if isinstance(secret, str):

@@ -51,7 +51,10 @@ def main():
     from .auth import TokenRegistry
 
     tokens = TokenRegistry.from_file(tokens_path)
-    app = create_app(sub, tokens)
+    disable_docs = os.environ.get("SUBSTRATE_DISABLE_DOCS", "").lower() in ("1", "true", "yes")
+    docs_url = None if disable_docs else "/docs"
+    openapi_url = None if disable_docs else "/openapi.json"
+    app = create_app(sub, tokens, docs_url=docs_url, openapi_url=openapi_url)
 
     import uvicorn
 
