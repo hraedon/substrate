@@ -9,8 +9,6 @@ from __future__ import annotations
 import uuid
 from pathlib import Path
 
-import pytest
-
 TESTS_DIR = Path(__file__).parent
 DSN = "postgresql://substrate_test:substrate_test@localhost:5432/substrate_test"
 KEY_PATH = str(TESTS_DIR / "test_keys.json")
@@ -326,7 +324,7 @@ class TestMaintenanceCounters:
             drop_project_schema(DSN, project)
 
     def test_maintenance_recurrences_fired_counter_registered(self):
-        """substrate_maintenance_recurrences_fired_total counter is registered and can be incremented."""
+        """substrate_maintenance_recurrences_fired_total counter is registered and can be incremented."""  # noqa: E501
         from prometheus_client import CollectorRegistry
 
         from substrate._observability import Metrics

@@ -4,7 +4,6 @@ import uuid
 from pathlib import Path
 
 import psycopg
-import pytest
 
 from substrate.testing import drop_project_schema
 

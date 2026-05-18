@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -538,7 +538,6 @@ class TestBC189OrphanEventDetection:
 
     def test_orphan_with_created_event_counts_as_warning(self, mem_sub):
         """An orphan work-item whose first event is 'created' is a warning (not halted)."""
-        from substrate._event_store import InMemoryEventStore
         from substrate._types import Event
 
         orphan_id = uuid.uuid4()

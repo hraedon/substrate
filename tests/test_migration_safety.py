@@ -10,9 +10,9 @@ import psycopg
 import pytest
 from psycopg.sql import SQL, Identifier
 
+from substrate._connection import ConnectionManager
 from substrate._errors import ErrorCode, SubstrateError
 from substrate._migrations import MIGRATION_LOCK_ID, run_migrations
-from substrate._connection import ConnectionManager
 from substrate.testing import drop_project_schema
 
 TESTS_DIR = Path(__file__).parent
@@ -85,7 +85,6 @@ class TestChecksumDriftDetection:
     raise MIGRATION_DRIFT with both checksums in the detail dict."""
 
     def test_drift_raises_migration_drift(self, tmp_path):
-        import importlib
         import substrate._migrations as mig_mod
 
         project = f"test_bc191_drift_{uuid.uuid4().hex[:8]}"
@@ -156,9 +155,10 @@ class TestChecksumDriftDetection:
             # Simulate a legacy row by clearing the checksum for version 1.
             with psycopg.connect(DSN, autocommit=True) as conn:
                 conn.execute(
-                    SQL("UPDATE {}._substrate_migrations SET checksum = NULL WHERE version = 1").format(
-                        Identifier(project)
-                    )
+                    SQL(
+                        "UPDATE {}._substrate_migrations "
+                        "SET checksum = NULL WHERE version = 1"
+                    ).format(Identifier(project))
                 )
 
             # Re-run — should backfill, not raise.

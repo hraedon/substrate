@@ -165,7 +165,7 @@ class TestAutoPartitionOnInit:
 
     def test_partitions_created_on_create_project(self):
         """create_project with auto_partition=True (default) ensures 3+ months of partitions."""
-        from datetime import UTC, date, datetime
+        from datetime import UTC, datetime
 
         from substrate import Substrate
 
