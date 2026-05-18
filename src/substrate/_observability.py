@@ -14,6 +14,8 @@ class Metrics:
         self._registry = registry or CollectorRegistry()
         self._counters: dict[str, Counter] = {}
         self._gauges: dict[str, Gauge] = {}
+        # Gauges with ["project", "status"] label set (separate from single-label gauges).
+        self._status_gauges: dict[str, Gauge] = {}
 
     def _counter(self, name: str, doc: str) -> Counter:
         if name not in self._counters:
@@ -28,6 +30,14 @@ class Metrics:
                 name, doc, ["project"], registry=self._registry
             )
         return self._gauges[name]
+
+    def _gauge_with_status(self, name: str, doc: str) -> Gauge:
+        """Return (or lazily create) a gauge with ['project', 'status'] labels."""
+        if name not in self._status_gauges:
+            self._status_gauges[name] = Gauge(
+                name, doc, ["project", "status"], registry=self._registry
+            )
+        return self._status_gauges[name]
 
     def set_gauge(self, name: str, project: str, value: float) -> None:
         gauges = {
@@ -45,6 +55,13 @@ class Metrics:
             self._gauge(metric_name, doc).labels(project=project).set(value)
         else:
             log.warning("metrics.unknown_gauge", name=name)
+
+    def set_hook_queue_depth(self, project: str, status: str, value: float) -> None:
+        """Update the hook_queue_depth gauge for a specific (project, status) label pair."""
+        self._gauge_with_status(
+            "substrate_hook_queue_depth",
+            "Number of rows in hook_queue by status",
+        ).labels(project=project, status=status).set(value)
 
     @property
     def registry(self) -> CollectorRegistry:
@@ -134,6 +151,30 @@ class Metrics:
             "recurrence_rules_registered": (
                 "substrate_recurrence_rules_registered_total",
                 "Recurrence rules registered",
+            ),
+            "maintenance_cycles": (
+                "substrate_maintenance_cycles_total",
+                "Maintenance loop iterations completed",
+            ),
+            "maintenance_claims_swept": (
+                "substrate_maintenance_claims_swept_total",
+                "Claims expired and cleared by maintenance",
+            ),
+            "maintenance_hook_leases_swept": (
+                "substrate_maintenance_hook_leases_swept_total",
+                "Stranded hook leases recovered by maintenance",
+            ),
+            "maintenance_partitions_created": (
+                "substrate_maintenance_partitions_created_total",
+                "Event partitions created by maintenance",
+            ),
+            "maintenance_recurrences_fired": (
+                "substrate_maintenance_recurrences_fired_total",
+                "Recurring work items created by maintenance",
+            ),
+            "maintenance_errors": (
+                "substrate_maintenance_errors_total",
+                "Unhandled errors in maintenance cycle",
             ),
         }
         if name in counters:

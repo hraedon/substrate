@@ -2,7 +2,7 @@
 number: "185"
 title: Maintenance metrics not specified in Plan 009 — operator blind to sweeps
 severity: medium
-status: proposed
+status: implemented
 kind: improvement
 author: kimi-k2p6-turbo
 date: "2026-05-18"
@@ -48,4 +48,29 @@ def maintenance_healthy(self) -> bool:
 
 ## Resolution
 
-_(pending implementation or rejection)_
+**Implemented 2026-05-18.**
+
+### What landed
+
+All six counters are now registered in `Metrics.inc` (`_observability.py`) and wired to existing call sites on `Substrate` (`__init__.py`):
+
+| Counter | Prometheus name | Wired to |
+|---|---|---|
+| `maintenance_cycles` | `substrate_maintenance_cycles_total` | Pending Plan 009 MaintenanceThread |
+| `maintenance_claims_swept` | `substrate_maintenance_claims_swept_total` | `Substrate.sweep_expired_claims()` |
+| `maintenance_hook_leases_swept` | `substrate_maintenance_hook_leases_swept_total` | `Substrate.sweep_expired_hook_leases()` |
+| `maintenance_partitions_created` | `substrate_maintenance_partitions_created_total` | `Substrate.ensure_event_partitions()` |
+| `maintenance_recurrences_fired` | `substrate_maintenance_recurrences_fired_total` | `Substrate.fire_recurrence()` |
+| `maintenance_errors` | `substrate_maintenance_errors_total` | Pending Plan 009 MaintenanceThread |
+
+`maintenance_healthy` property added to both `Substrate` and `InMemorySubstrate`. Currently returns `True` (no thread exists yet). Docstring documents that it becomes meaningful once Plan 009 lands.
+
+InMemory backend: no Prometheus registry; `refresh_hook_queue_metrics()` emits structured log lines. No per-counter log lines for the InMemory backend (counters are no-ops for InMemory since there's no registry — operators running InMemory in tests don't need operational metrics).
+
+### Note on `maintenance_partitions_created_total`
+
+`ensure_event_partitions` issues `CREATE TABLE IF NOT EXISTS` for each month in the window, and the counter increments by the number of partition names returned (which includes already-existing partitions, since `IF NOT EXISTS` makes every call idempotent). In practice the maintenance thread will call this infrequently (daily or monthly), so the counter approximates new partitions over time. A stricter implementation would query `pg_class` before each CREATE; deferred to Plan 009.
+
+### Pending Plan 009
+
+`substrate_maintenance_cycles_total` and `substrate_maintenance_errors_total` have no call site yet — they'll be incremented by the MaintenanceThread loop body and error handler respectively.

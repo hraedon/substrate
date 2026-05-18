@@ -33,9 +33,6 @@ _(none)_
 
 | # | Title | Severity | Status |
 |---|---|---|---|
-| 184 | Hook queue depth metric missing — no backpressure visibility | medium | proposed |
-| 185 | Maintenance metrics not specified in Plan 009 — operator blind to sweeps | medium | proposed |
-| 192 | Validator timeout leaks threads; cancel_futures is misleading | medium | proposed |
 | 193 | read_events_by_work_item partition-pruning hack undocumented; NULL fallback scans all | medium | proposed |
 | 194 | heartbeat_claim mutates claim_expires_at without emitting an event | medium | proposed |
 | RFC-001 | Reconcile event_id global-uniqueness spec with partitioned events table | high | proposed |
@@ -44,6 +41,9 @@ _(none)_
 
 | # | Title | Severity | Resolution |
 |---|---|---|---|---|
+| 185 | Maintenance metrics not specified in Plan 009 — operator blind to sweeps | medium | Counters `substrate_maintenance_cycles_total`, `substrate_maintenance_claims_swept_total`, `substrate_maintenance_hook_leases_swept_total`, `substrate_maintenance_partitions_created_total`, `substrate_maintenance_recurrences_fired_total`, and `substrate_maintenance_errors_total` added to `Metrics.inc`. Wired to: `sweep_expired_claims`, `sweep_expired_hook_leases`, `ensure_event_partitions`, and `fire_recurrence` on `Substrate`. `maintenance_healthy` property added to both `Substrate` and `InMemorySubstrate` (returns True pending Plan 009 thread). InMemory backend uses structured log. `maintenance_cycles_total` call site pending Plan 009 MaintenanceThread. |
+| 184 | Hook queue depth metric missing — no backpressure visibility | medium | `substrate_hook_queue_depth` Prometheus gauge with `project` + `status` labels added. `Metrics.set_hook_queue_depth()` helper and `Substrate.refresh_hook_queue_metrics()` method added. Gauge covers `pending`, `in_progress`, `completed`, and `dead_letter` (separate table) status buckets. InMemory backend emits `substrate.maintenance.hook_queue_depth` structured log line. Tests in `tests/test_bc184_bc185_metrics.py`. |
+| 192 | Validator timeout leaks threads; cancel_futures is misleading | medium | Option 2 (drop the safety theater): `check_validator_io_safety` + ThreadPoolExecutor removed; `run_validator` now calls the handler directly. Validators are trusted, synchronous, in-process — Postgres `statement_timeout` (5s) is the only remaining real bound, and only for DB operations on the transaction's connection. spec.md §FR-13 rewritten; tests pinned to the new contract. VALIDATOR_TIMEOUT/VALIDATOR_IO_UNSAFE error codes kept in enum for back-compat. |
 | 191 | Migration runner lacks advisory lock and checksum verification | high | Advisory lock via `pg_advisory_lock(2479241334166598476)` wraps `run_migrations`; checksum BYTEA column added via migration 013; NULL legacy rows backfilled silently; non-NULL mismatches raise `MIGRATION_DRIFT`. |
 | 189 | In-memory replay omits claim_expires_at and orphan-event detection | high | Ported orphan-event scan from Postgres replay into in-memory replay (the genuine parity gap). `claim_expires_at` comparison was added then reverted — `heartbeat_claim` mutates the live value without an event, making it structurally non-replayable today; see BC-194. `TestBC189OrphanEventDetection` and parity guard `test_replay_no_drift_with_active_claim` retained. |
 | 188 | ConnectionManager.connect() does not SET search_path — cross-schema DROP risk | high | `connect()` now executes `SET search_path TO {schema}` (session-scoped) before yielding, symmetric with `transaction()`. Regression test in `tests/test_bc188_connect_search_path.py` verifies two-schema isolation for `drop_old_replay_tables`. |

@@ -130,11 +130,12 @@ def transition(
                         )
                         conn.execute("SET LOCAL statement_timeout = 0")
                         metrics.inc("validators_succeeded", project)
-                    except SubstrateError as e:
-                        if e.code == ErrorCode.VALIDATOR_TIMEOUT:
-                            metrics.inc("validators_timed_out", project)
-                        else:
-                            metrics.inc("validators_failed", project)
+                    except SubstrateError:
+                        # BC-192: VALIDATOR_TIMEOUT branch removed — validators
+                        # no longer have a Python-side wall-clock bound. A DB
+                        # statement_timeout firing raises psycopg.QueryCanceled,
+                        # not SubstrateError.
+                        metrics.inc("validators_failed", project)
                         raise
                 else:
                     log.warning(

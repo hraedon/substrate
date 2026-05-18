@@ -2,7 +2,7 @@
 number: "192"
 title: "Validator timeout leaks threads; ThreadPoolExecutor cancel_futures is misleading"
 severity: medium
-status: proposed
+status: implemented
 kind: bug
 author: claude
 date: "2026-05-18"
@@ -38,4 +38,18 @@ Choose one of:
 
 ## Resolution
 
-_(pending)_
+**Option 2 chosen: drop the safety theater.** Validators are now trusted, synchronous, in-process — the contract substrate can actually enforce, not the one it pretended to.
+
+**Files changed:**
+
+- `src/substrate/_hooks.py`: `run_validator` body replaced with a direct `handler(ctx)` call. ThreadPoolExecutor, FuturesTimeout, ast, inspect, textwrap imports removed. `check_validator_io_safety` and `_IO_MODULES` deleted. Near-threshold soft-warning preserved (operator visibility), now logged as `validators.slow` with `soft_threshold_s` field instead of `validators.near_timeout`/`timeout_s` to reflect that it is informational only.
+- `src/substrate/__init__.py`: `register_validator` no longer calls `check_validator_io_safety`. Docstring rewritten to state the trusted-code contract and the limits of Postgres `statement_timeout`. Public `transition` docstring's `Raises` block no longer lists `VALIDATOR_TIMEOUT`.
+- `src/substrate/_in_memory.py`: `register_validator` no longer calls `check_validator_io_safety`.
+- `src/substrate/_transition.py`: the `if e.code == ErrorCode.VALIDATOR_TIMEOUT` branch removed; comment explains why.
+- `src/substrate/_errors.py`: `VALIDATOR_TIMEOUT` and `VALIDATOR_IO_UNSAFE` marked obsolete (kept in enum for back-compat with any client that pattern-matches on them).
+- `spec.md` §FR-13 transition-validator bullet: rewritten to state the honest contract.
+- `tests/test_validator_hardening.py`: rewritten. Removed `TestValidatorIODetection` (premise gone), `TestValidatorWatchdog::test_emits_near_timeout_on_slow_validator` (replaced with a does-not-raise variant), `TestStatementTimeout::test_validator_timeout_with_statement_timeout` (the Python-side wall-clock bound that test depended on is gone — `time.sleep(10)` no longer raises `VALIDATOR_TIMEOUT`), and `TestRegistrationIOSafetyIntegration` (registration no longer rejects I/O handlers). Added `TestTrustedValidatorContract` to pin the new behavior.
+
+**Behavior change summary:** A validator that hangs (`time.sleep(N)`, `while True`) now hangs the transaction. A validator that does I/O is the caller's problem; substrate makes no claim to detect or prevent it. Postgres `statement_timeout = '5s'` set by `_transition.py` still protects against blocking DB operations made via the transaction's connection (real protection, not theater).
+
+**No public API method signatures changed.** Two error codes (`VALIDATOR_TIMEOUT`, `VALIDATOR_IO_UNSAFE`) are now never raised by substrate but remain in the enum for back-compat.

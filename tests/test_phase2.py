@@ -196,28 +196,10 @@ class TestValidators:
         assert refreshed is not None
         assert refreshed.current_state == "new"
 
-    def test_validator_timeout(self, substrate):
-        import time
-
-        def _slow(ctx):
-            time.sleep(10)
-
-        substrate.register_validator("validate_start", _slow)
-
-        wi, _ = substrate.create_work_item(
-            workflow_name="test_workflow",
-            work_item_type="feature",
-            actor_id="agent-1",
-            custom_fields={"title": "Timeout test"},
-        )
-
-        with pytest.raises(Exception, match="VALIDATOR_TIMEOUT"):
-            substrate.transition(
-                work_item_id=wi.work_item_id,
-                transition_name="start",
-                actor_id="agent-1",
-                actor_metadata={"role": "agent"},
-            )
+    # test_validator_timeout removed per BC-192 — Python-side wall-clock
+    # bound on validators was dropped (Option 2: trusted code). A slow
+    # validator now hangs the transaction; see tests/test_validator_hardening.py
+    # for the trusted-contract assertions.
 
     def test_validator_not_registered_warns(self, substrate):
         wi, _ = substrate.create_work_item(

@@ -1,14 +1,9 @@
 from __future__ import annotations
 
-import ast
-import inspect
-import textwrap
 import threading
 import time
 import uuid
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
-from concurrent.futures import TimeoutError as FuturesTimeout
 from datetime import UTC, datetime, timedelta
 
 import psycopg
@@ -24,13 +19,6 @@ from ._types import HookContext, ValidatorContext
 
 log = structlog.get_logger()
 
-_IO_MODULES = frozenset({
-    "socket", "http", "urllib", "requests", "aiohttp", "httpx",
-    "ssl", "ftplib", "smtplib", "telnetlib", "xmlrpc",
-    "psycopg", "sqlite3", "pymysql", "redis",
-    "subprocess",
-})
-
 
 def run_validator(
     validator_name: str,
@@ -40,37 +28,31 @@ def run_validator(
     metrics: Metrics | None = None,
     project: str | None = None,
 ) -> None:
+    # Validators run synchronously in the caller's thread inside the surrounding
+    # transaction. There is no enforced wall-clock bound — a hanging or
+    # CPU-bound validator hangs the transaction. The Postgres-level
+    # statement_timeout set by the caller protects against blocking DB
+    # operations, but not against pure Python loops or sleeps. This is the
+    # honest contract per BC-192: validators are trusted code.
     start = time.monotonic()
-    executor = ThreadPoolExecutor(max_workers=1)
-    future = executor.submit(handler, ctx)
     try:
-        future.result(timeout=timeout)
-    except FuturesTimeout:
-        executor.shutdown(wait=False, cancel_futures=True)
-        raise SubstrateError(
-            ErrorCode.VALIDATOR_TIMEOUT,
-            f"Validator {validator_name!r} timed out after {timeout}s",
-        )
+        handler(ctx)
     except SubstrateError:
-        executor.shutdown(wait=False)
         raise
     except Exception as e:
-        executor.shutdown(wait=False)
         raise SubstrateError(
             ErrorCode.VALIDATOR_FAILED,
             f"Validator {validator_name!r} failed: {e}",
         ) from e
 
-    executor.shutdown(wait=True)
-
     elapsed = time.monotonic() - start
     near_threshold = timeout * 0.8
     if elapsed >= near_threshold:
         log.warning(
-            "validators.near_timeout",
+            "validators.slow",
             validator_name=validator_name,
             elapsed_s=round(elapsed, 3),
-            timeout_s=timeout,
+            soft_threshold_s=timeout,
         )
         if metrics and project:
             metrics.inc("validators_near_timeout", project)
@@ -437,41 +419,6 @@ def requeue_dead_lettered_hook(
     conn.execute(
         SQL("NOTIFY {}, {}").format(Identifier(channel), Literal(str(row["event_id"]))),
     )
-
-
-def check_validator_io_safety(handler: Callable, name: str) -> None:
-    try:
-        source = textwrap.dedent(inspect.getsource(handler))
-    except (OSError, TypeError):
-        log.warning("validators.io_check_skipped", validator_name=name, reason="source_unavailable")
-        return
-    try:
-        tree = ast.parse(source)
-    except SyntaxError:
-        log.warning("validators.io_check_skipped", validator_name=name, reason="parse_failed")
-        return
-
-    names_used = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Name):
-            names_used.add(node.id)
-
-    globs = getattr(handler, "__globals__", {})
-    for n in names_used:
-        obj = globs.get(n)
-        if obj is None:
-            continue
-        if inspect.ismodule(obj):
-            mod_name = obj.__name__
-        else:
-            mod_name = getattr(obj, "__module__", "") or ""
-        root = mod_name.split(".")[0]
-        if root in _IO_MODULES:
-            raise SubstrateError(
-                ErrorCode.VALIDATOR_IO_UNSAFE,
-                f"Validator {name!r} references I/O module {mod_name!r}. "
-                f"Sync validators must not perform I/O.",
-            )
 
 
 class HookConsumer:

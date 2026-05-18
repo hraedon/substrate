@@ -261,13 +261,14 @@ class Substrate:
 
         Args:
             name: Must match a ``validator`` field in a workflow transition.
-            handler: ``Callable[[ValidatorContext], None]``. Must complete
-                within 5 seconds. Must not perform I/O (best-effort AST
-                check at registration time).
+            handler: ``Callable[[ValidatorContext], None]``. Runs synchronously
+                in the transaction's thread. **Trusted code**: substrate does
+                not enforce wall-clock or I/O bounds (see BC-192). A validator
+                that hangs or blocks hangs the transaction. The surrounding
+                Postgres ``statement_timeout`` (5s) protects against blocking
+                DB operations made via the transaction's connection, but not
+                against pure-Python loops, sleeps, or external I/O.
         """
-        from ._hooks import check_validator_io_safety
-
-        check_validator_io_safety(handler, name)
         updated = dict(self._validators)
         updated[name] = handler
         self._validators = updated
@@ -338,6 +339,10 @@ class Substrate:
         self._metrics.set_gauge("events_default_rows", self._project, default_count)
         if horizon is not None:
             self._metrics.set_gauge("events_partition_horizon_days", self._project, horizon)
+        if names:
+            self._metrics.inc(
+                "maintenance_partitions_created", self._project, amount=len(names)
+            )
         return names
 
     def claim_hooks(
@@ -409,7 +414,56 @@ class Substrate:
         from ._hooks import sweep_expired_hook_leases as _sweep
 
         with self._mgr.transaction() as conn:
-            return _sweep(conn)
+            swept = _sweep(conn)
+        if swept:
+            self._metrics.inc("maintenance_hook_leases_swept", self._project, amount=swept)
+        return swept
+
+    def refresh_hook_queue_metrics(self) -> None:
+        """Query hook_queue and update the ``substrate_hook_queue_depth`` gauge.
+
+        Updates four status labels: ``pending``, ``in_progress``, ``completed``,
+        and ``dead_letter`` (the dead-letter table is separate from hook_queue
+        but included for completeness as it represents backlogged work).
+
+        This is a lightweight SELECT COUNT(*) and safe to call frequently.
+        The maintenance thread (Plan 009) will call this at the end of every
+        sweep cycle. Operators may also call it on demand.
+        """
+        from psycopg.sql import SQL
+
+        with self._mgr.transaction() as conn:
+            rows = conn.execute(
+                SQL(
+                    "SELECT status, count(*) AS n "
+                    "FROM hook_queue "
+                    "GROUP BY status"
+                )
+            ).fetchall()
+            dead_row = conn.execute(
+                SQL("SELECT count(*) AS n FROM hook_dead_letter")
+            ).fetchone()
+
+        counts = {r["status"]: int(r["n"]) for r in rows}
+        for status in ("pending", "in_progress", "completed"):
+            self._metrics.set_hook_queue_depth(
+                self._project, status, float(counts.get(status, 0))
+            )
+        self._metrics.set_hook_queue_depth(
+            self._project, "dead_letter", float(dead_row["n"] if dead_row else 0)
+        )
+
+    @property
+    def maintenance_healthy(self) -> bool:
+        """True if the maintenance thread is running and its last cycle succeeded.
+
+        Currently always returns ``True`` because the MaintenanceThread has
+        not yet been implemented (pending Plan 009). Once Plan 009 lands, this
+        property will reflect the thread's liveness and last-cycle success
+        status. Operators should not treat ``True`` here as confirmation that
+        maintenance is *actively* running until Plan 009 is deployed.
+        """
+        return True
 
     def register_workflow(
         self,
@@ -496,7 +550,8 @@ class Substrate:
 
         Raises:
             SubstrateError: ``WORKFLOW_NOT_REGISTERED``,
-                ``WORK_ITEM_TYPE_NOT_DECLARED``, ``CUSTOM_FIELD_VIOLATION``.
+                ``WORK_ITEM_TYPE_NOT_DECLARED``, ``CUSTOM_FIELD_VIOLATION``,
+                ``VALIDATOR_FAILED``.
         """
         from ._work_items_api import create_work_item as _impl
 
@@ -857,7 +912,10 @@ class Substrate:
             Number of expired claims swept.
         """
         from ._claims_api import sweep_expired_claims as _impl
-        return _impl(self._mgr, self._keys, self._metrics, self._project)
+        swept = _impl(self._mgr, self._keys, self._metrics, self._project)
+        if swept:
+            self._metrics.inc("maintenance_claims_swept", self._project, amount=swept)
+        return swept
 
     def create_link(
         self,
@@ -1225,7 +1283,9 @@ class Substrate:
 
     def fire_recurrence(self, rule_id: uuid.UUID) -> tuple[dict, dict]:
         from ._recurrence_api import fire_recurrence as _impl
-        return _impl(self._mgr, self._keys, self._metrics, self._project, rule_id)
+        result = _impl(self._mgr, self._keys, self._metrics, self._project, rule_id)
+        self._metrics.inc("maintenance_recurrences_fired", self._project)
+        return result
 
     def cancel_recurrence_rule(self, rule_id: uuid.UUID) -> None:
         from ._recurrence_api import cancel_recurrence_rule as _impl

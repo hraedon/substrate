@@ -5,7 +5,10 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
+import structlog
 import yaml
+
+log = structlog.get_logger()
 
 from ._contract import (
     Jsonb,
@@ -106,9 +109,8 @@ class InMemorySubstrate:
         return ConnectionInfo(host=None, port=None, database=None, project=self._project)
 
     def register_validator(self, name: str, handler: Callable) -> None:
-        from ._hooks import check_validator_io_safety
-
-        check_validator_io_safety(handler, name)
+        # Validators are trusted, run synchronously in the caller's thread.
+        # See Substrate.register_validator docstring and BC-192.
         updated = dict(self._validators)
         updated[name] = handler
         self._validators = updated
@@ -628,6 +630,38 @@ class InMemorySubstrate:
     ) -> list[Event]:
         from ._lint import actor_metadata_complete as _complete
         return _complete(events, expected_keys)
+
+    def refresh_hook_queue_metrics(self) -> None:
+        """Emit structured log lines with hook_queue depth counts.
+
+        The InMemory backend has no Prometheus registry, so this emits
+        ``substrate.maintenance.hook_queue_depth`` log lines instead.
+        The maintenance thread (Plan 009) will call this after every sweep cycle.
+        """
+        status_counts: dict[str, int] = {}
+        for entry in self._hook_queue:
+            s = entry.get("status", "pending")
+            status_counts[s] = status_counts.get(s, 0) + 1
+        dead_count = len(self._dead_letter)
+        log.info(
+            "substrate.maintenance.hook_queue_depth",
+            project=self._project,
+            pending=status_counts.get("pending", 0),
+            in_progress=status_counts.get("in_progress", 0),
+            completed=status_counts.get("completed", 0),
+            dead_letter=dead_count,
+        )
+
+    @property
+    def maintenance_healthy(self) -> bool:
+        """True if the maintenance thread is running and its last cycle succeeded.
+
+        Currently always returns ``True`` because the MaintenanceThread has
+        not yet been implemented (pending Plan 009). Once Plan 009 lands, this
+        property will reflect the thread's liveness and last-cycle success
+        status.
+        """
+        return True
 
     def _append_simple_event(
         self, wi: dict, event_id: uuid.UUID,
