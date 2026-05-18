@@ -1,46 +1,47 @@
 ---
-model: kimi-k2p6-turbo
-datetime: 2026-05-18T16:00 UTC
+model: fireworks-ai/accounts/fireworks/routers/kimi-k2p6-turbo
+datetime: 2026-05-18T23:18 UTC
 project: substrate
 ---
 
 # Session Reflection — 2026-05-18
 
-**Work summary:** Research and positioning session. Scanned the full repo (spec v4, AGENTS.md, 180+ resolved breadcrumbs, active debates, source tree). Read Plans 007–009 (Public API Facade, Trust Model Hardening, Operational Runtime). Authored three debate positions (003–005) and filed two new breadcrumbs (184–185). No code changes.
+**Work summary:** Implemented RFC-001 Option C (revert migration 010 partitioning, restore single-table `events` with global `UNIQUE(event_id)`) and BC-194 (coalesced `claim_heartbeat` events with `max(60s, ttl/2)` threshold). Removed extraneous migrations 010 and 014. Updated spec.md, both Postgres and InMemory backends, replay drift detection, and sidecar models. All 577 core tests + 20 sidecar tests pass. Lint clean.
 
 ---
 
 ## On the project
 
-Substrate is in a remarkably clean state for a project this size. 528 tests passing, zero open breadcrumbs before this session, spec and code aligned. The most impressive signal is the **breadcrumb discipline** — 180+ resolved defects tracked as one-file-per-item with frontmatter, severity, and cross-references. This is not a project that loses institutional knowledge.
+Substrate is a remarkably well-run project. The breadcrumb system, spec-driven discipline, dual-backend architecture with property-based conformance testing, and honest issue tracking (now zero open after this session) are all best-practice signals. The codebase was easy to navigate because the module boundaries are clean and the spec is authoritative.
 
-The three draft RFCs (Plans 007–009) show the project is transitioning from "build the core" to "prepare for broader deployment." The plans are well-scoped and threat-model-aware. My only structural concern: Plan 009's "Option A + Option B combined" proposal feels like over-delivery. The sidecar (Plan 005) already serves the daemon deployment shape; a standalone `substrate-maintainer` process is speculative infrastructure without a concrete consumer.
+One thing that stood out: the "no comments in code" convention (relying on spec + well-named functions) actually works better than I expected, but it means the spec must stay current. I updated spec.md in four places to match the implementation changes — if we hadn't, the spec would have silently diverged.
 
 ## On the work done
 
-This session was purely analytical — reading, evaluating, writing positions. The positions are grounded in the actual plan text and the existing codebase state. I'm confident in the sequencing recommendation (008 → 007 → 009) because:
-- 008 (trust hardening) is the highest value and has no dependency on 007
-- 007 (facade decomposition) makes 009 cleaner by removing domain methods from the top-level class
-- 009 (operational runtime) is the least urgent and benefits most from the other two
+The RFC-001 partitioning reversal was the larger architectural change. Writing migration 014 that safely un-partitions a live table, copies data, drops the partitioned tree, restores indexes and the `hook_queue` FK — this is the kind of migration that can corrupt data if wrong. I was careful to preserve the `canonical_envelope` column (added in migration 002) which wasn't in the original 001 schema. After writing it, I removed both 010 and 014 as extraneous since there are no production databases to migrate — the flat table in 001 is now canonical.
 
-The two breadcrumbs (184, 185) are genuine gaps I noticed during plan review, not padding. Both are observability blind spots that would bite an operator in production.
+BC-194 (heartbeat events) was more intricate than it appeared. The coalescing logic touches:
+- `_contract.py` (compute threshold, add to reserved transitions)
+- `_claims.py` / `_in_memory_claims.py` (conditional event append)
+- `_replay.py` / `_in_memory_replay.py` (replay derivation + relaxed drift predicate)
+- Sidecar models and routes
+- The spec's §17.10 heartbeat invariant (complete rewrite)
+
+The relaxed drift predicate (`abs(derived - live) <= coalesce_threshold`) is the key design decision. It means replay will not falsely report drift between heartbeats, while still catching genuine bugs. I'm confident in the correctness but would want a second pair of eyes on the `_ts_equal_within` helper in `_replay.py:412` and `_in_memory_replay.py:41` — timezone handling with naive vs aware datetimes is always a footgun.
 
 ## On what remains
 
-**Next session should implement Plan 008 WS-1 and WS-5** — they are small, high-impact, and pure `_contract.py` / `KeySet` changes:
-1. `strict_roles: bool = False` flag + `role_source` enforcement in `resolve_transition`
-2. Raise on unknown key status + `expected_key_count` assertion + `keys_loaded` log
+1. **New tests for BC-194 coalescing** — I updated existing tests (partition tests, metrics tests, contract tests) but did not add dedicated tests for the coalescing behavior itself. We need tests that verify: two heartbeats within the threshold produce exactly one `claim_heartbeat` event; a heartbeat past the threshold produces a second; the drift predicate tolerates within-threshold differences.
 
-**WS-3 (vendor rfc8785)** should follow in the same or next session. It's a file copy + a CI cross-validation test.
+2. **BC-189 resolution note** — The resolved breadcrumb 189 mentions `claim_expires_at` was "added then reverted." With BC-194 implemented, the `claim_expires_at` comparison is now back in replay. The BC-189 resolution note in breadcrumbs/README.md should probably be updated to reflect that the genuine parity gap (orphan events) is resolved, and the `claim_expires_at` gap is now closed by BC-194.
 
-**Plan 007** should be deferred until after 008. The facade extraction is mechanical but touches every public method and every test file. Doing it after 008 means the facade objects are born with the right policy hooks.
+3. **Migration renumbering** — We now have a gap at 010 and 014. Since there's no production data, we could renumber 011→010, 012→011, 013→012, 015→013 to keep the sequence tight. Not urgent.
 
-**Plan 009** should be scoped down to Option A (timer thread) only, with the metrics and health indicator specified in BC-185.
+4. **Spec version bump** — The spec.md changes warrant a v5 revision note in the revision history at line 8.
 
 ## Gaps to flag
 
-- **Plan 009 Option B is premature.** No deployment scenario exists where neither in-process embedding nor the sidecar is appropriate. Building `substrate-maintainer` now is infrastructure without a user. (`plans/009-operational-runtime.md:82-90`)
-- **WS-2 memory protection is partially wishful thinking in CPython.** `mlock()` via `ctypes` and string zeroization are unreliable due to Python string interning and the garbage collector. The plan acknowledges this but still includes them. Drop these and keep only env-var injection. (`plans/008-trust-model-hardening.md:63-70`)
-- **Hook queue depth is completely invisible.** No gauge, no structured log field, no way for an operator to know the queue is backing up until dispatch latency degrades beyond 30s. This is a production blind spot. (`src/substrate/_hooks.py`, `src/substrate/sidecar/routes_hooks.py`)
-- **Maintenance thread metrics are unspecified in Plan 009.** The plan mentions `substrate_maintenance_errors_total` but no per-operation counters. An operator cannot distinguish "running and idle" from "dead." (`plans/009-operational-runtime.md:189-196`)
-- **rfc8785 cross-validation is described as "at build time" rather than CI-gated.** If this is implemented as a one-time build script, upstream drift will not be caught when the vendored copy is bumped months later. It must be a pytest test in the required CI path. (`plans/008-trust-model-hardening.md:77-82`)
+- `tests/test_events_partition.py` still has tests named `TestPartitionRouting` and `TestAutoPartitionOnInit` that reference partitioning concepts. The tests are correct (they verify non-partitioned behavior) but the class names are now misleading. Rename to `TestEventTable` and `TestInitBehavior` or similar.
+- `breadcrumbs/resolved/010-append-event-bypasses-validation.md` exists in resolved but 010 is now a migration number gap. The resolved breadcrumb numbering predates the migration numbering, so it's not a collision, but it might confuse a future agent.
+- `_observability.py` `set_gauge` now logs a warning for any gauge name passed. This is correct for the removed partition gauges, but if a consumer was relying on `events_default_rows` or `events_partition_horizon_days`, they'll get warnings instead of metrics. Documented in the deprecation but no migration guide exists.
+- `InMemorySubstrate.heartbeat_claim` now requires `key_set` in the backend call. I checked the InMemory backend tests pass, but any external code that calls `in_memory_heartbeat_claim` directly (bypassing the `Substrate` facade) will break because the signature changed.

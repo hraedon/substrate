@@ -248,6 +248,7 @@ def _replay_work_item(
     attempt_number = 0
     claimed_by: str | None = None
     claim_expires_at: datetime | None = None
+    claim_coalesce_threshold: float = 0.0
     warnings = 0
 
     for evt in events:
@@ -311,6 +312,7 @@ def _replay_work_item(
             "claim_stolen",
             "claim_released",
             "claim_expired",
+            "claim_heartbeat",
             "hook_dead_lettered",
         ):
             if transition in ("claim_acquired", "claim_stolen"):
@@ -327,9 +329,16 @@ def _replay_work_item(
                 expires_str = payload.get("expires_at")
                 if expires_str:
                     claim_expires_at = datetime.fromisoformat(expires_str)
+            elif transition == "claim_heartbeat":
+                payload = evt["payload"] or {}
+                expires_str = payload.get("expires_at")
+                if expires_str:
+                    claim_expires_at = datetime.fromisoformat(expires_str)
+                claim_coalesce_threshold = payload.get("coalesce_threshold") or 0.0
             elif transition in ("claim_released", "claim_expired"):
                 claimed_by = None
                 claim_expires_at = None
+                claim_coalesce_threshold = 0.0
         elif transition == "escalated":
             needs_review = True
         elif transition == "not_before_set":
@@ -380,6 +389,7 @@ def _replay_work_item(
         "attempt_number": attempt_number,
         "claimed_by": claimed_by,
         "claim_expires_at": claim_expires_at,
+        "claim_coalesce_threshold": claim_coalesce_threshold,
     }, warnings
 
 
@@ -424,10 +434,23 @@ def _states_match(replayed: dict, live: dict) -> bool:
         return False
     if replayed["claimed_by"] != live["claimed_by"]:
         return False
-    # claim_expires_at intentionally excluded — heartbeat_claim mutates live
-    # without emitting an event, so this field is structurally non-replayable
-    # until heartbeats emit a claim_heartbeat event. See BC-189 Resolution.
+    threshold = replayed.get("claim_coalesce_threshold", 0.0)
+    if not _ts_equal_within(
+        replayed["claim_expires_at"], live["claim_expires_at"], threshold,
+    ):
+        return False
     return True
+
+
+def _ts_equal_within(
+    a: datetime | None, b: datetime | None, threshold_seconds: float,
+) -> bool:
+    if a is None and b is None:
+        return True
+    if a is None or b is None:
+        return False
+    diff = abs((a.astimezone(UTC) - b.astimezone(UTC)).total_seconds())
+    return diff <= threshold_seconds
 
 
 def _diff_fields(replayed: dict, live: dict) -> list[str]:
@@ -446,5 +469,9 @@ def _diff_fields(replayed: dict, live: dict) -> list[str]:
         diffs.append("attempt_number")
     if replayed["claimed_by"] != live["claimed_by"]:
         diffs.append("claimed_by")
-    # claim_expires_at omitted from drift detection — see _states_match.
+    threshold = replayed.get("claim_coalesce_threshold", 0.0)
+    if not _ts_equal_within(
+        replayed["claim_expires_at"], live["claim_expires_at"], threshold,
+    ):
+        diffs.append("claim_expires_at")
     return diffs

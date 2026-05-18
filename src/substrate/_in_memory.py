@@ -406,12 +406,15 @@ class InMemorySubstrate:
         ttl_seconds: int = 300,
         *,
         expected_attempt_number: int | None = None,
+        coalesce_threshold: float | None = None,
     ) -> Claim:
         from ._in_memory_claims import in_memory_heartbeat_claim
 
         return in_memory_heartbeat_claim(
-            self._work_items, self._claims, work_item_id, actor_id,
-            ttl_seconds, expected_attempt_number=expected_attempt_number,
+            self._store, self._work_items, self._claims, self._key_set,
+            work_item_id, actor_id, ttl_seconds,
+            expected_attempt_number=expected_attempt_number,
+            coalesce_threshold=coalesce_threshold,
         )
 
     def release_claim(

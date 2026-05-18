@@ -110,6 +110,7 @@ class HeartbeatClaimRequest(BaseModel):
     work_item_id: str
     ttl_seconds: int = 300
     expected_attempt_number: int | None = None
+    coalesce_threshold: float | None = None
 
 
 class ReleaseClaimRequest(BaseModel):

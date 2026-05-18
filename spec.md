@@ -90,7 +90,7 @@
 - FR-01 **[MVP]**: Define a work-item with project-declared workflow (pinned version), work-item-type, current state, custom-typed fields, links (derived from event stream — see FR-22/FR-23), `needs_review` flag, `not_before` timestamp.
 - FR-02 **[MVP]**: Create a work-item — validates workflow registered, work-item-type declared in that workflow, generates ID, validates initial custom field values against type schema, records `created` event.
 - FR-03 **[MVP]**: Append events to immutable per-project event log. Each event carries:
-  - `event_id` — client-supplied UUIDv4. Doubles as the API-layer idempotency key for event append. Unique within a project DB. Duplicate `event_id` returns the original event row deterministically (not an error); enables safe retry across transient failures (BR-12).
+  - `event_id` — client-supplied UUIDv4. Doubles as the API-layer idempotency key for event append. Unique within a project DB, enforced by a database-level unique index on `events(event_id)`. Duplicate `event_id` returns the original event row deterministically (not an error); enables safe retry across transient failures (BR-12). Cross-work-item reuse of the same `event_id` is rejected with `EVENT_ID_GLOBAL_COLLISION`.
   - `work_item_id`
   - `event_seq` — **gap-free** monotonic per work-item; allocated under the canonical lock (§17.2, §17.4).
   - `actor_id`, `actor_kind` — authenticated via HMAC (FR-15). Trust tier: *authenticated*.
@@ -228,7 +228,7 @@
 - **Prometheus metrics:** standard exposition endpoint
 
 **Persisted state (per project DB):**
-- `events` — append-only event log; partitioning deferred until volume warrants
+- `events` — append-only event log; single flat table with global unique index on `event_id`
 - `work_items_current` — current-state denormalization; rebuildable from `events`
 - `claims` — current claim per work-item (or null), with `actor_id`, `acquired_at`, `expires_at`, `attempt_number`
 - `hook_queue` — pending async hooks with retry metadata
@@ -237,7 +237,7 @@
 - `workflow_registry` — registered workflow definitions, append-only (versioned, immutable once referenced)
 - Migration metadata (substrate-managed, e.g., Alembic-equivalent)
 
-Retention: indefinite for v1. Future move when needed: month-partition `events` table (and possibly `hook_queue`/`hook_dead_letter`); operator-driven archival.
+Retention: indefinite for v1. Operator-driven archival when volume warrants. Re-partitioning is a known recipe (declarative `PARTITION BY RANGE (timestamp)`) if a single project exceeds ~10M events/month.
 
 ---
 
@@ -257,7 +257,7 @@ Retention: indefinite for v1. Future move when needed: month-partition `events` 
 
 - BR-11: **Projection invariant.** `work_items_current` is fully derivable from `events`. Substrate writes to it only inside the event-append transaction. Direct `UPDATE` / `DELETE` on `work_items_current` outside the substrate's API is forbidden by contract; recommended Postgres role separation enforces this at the database level. Drift between the live projection and an event-log replay is detected via FR-16 `replay_report`. See §18.
 
-- BR-12: **API-layer idempotency.** All event-emitting mutation operations (event append, transition, claim acquire / release, link create / remove) accept a client-supplied `event_id` (UUIDv4) that doubles as the idempotency key. Duplicate `event_id` returns the original result deterministically rather than producing a second logical operation; this makes caller-side retry across transient failures (DB connection drop, partial response) safe. Operations with structural idempotency do not take an explicit key: `register_workflow` is idempotent on `(workflow_name, version)` (the natural uniqueness constraint); `heartbeat_claim` is idempotent on `(work_item_id, actor_id, attempt_number)` (a repeated heartbeat from the same claim-holder simply extends the TTL). Consolidating idempotency on `event_id` — rather than carrying a parallel `idempotency_key` table — is sufficient because every audit-relevant mutation is now an event (BC-005), and the events table already enforces `event_id` uniqueness.
+- BR-12: **API-layer idempotency.** All event-emitting mutation operations (event append, transition, claim acquire / release, link create / remove) accept a client-supplied `event_id` (UUIDv4) that doubles as the idempotency key. Duplicate `event_id` returns the original result deterministically rather than producing a second logical operation; this makes caller-side retry across transient failures (DB connection drop, partial response) safe. Operations with structural idempotency do not take an explicit key: `register_workflow` is idempotent on `(workflow_name, version)` (the natural uniqueness constraint); `heartbeat_claim` is idempotent on `(work_item_id, actor_id, attempt_number)` (a repeated heartbeat from the same claim-holder simply extends the TTL). Consolidating idempotency on `event_id` — rather than carrying a parallel `idempotency_key` table — is sufficient because every audit-relevant mutation is now an event (BC-005), and the events table enforces `event_id` uniqueness via a database unique index (migration 014). Cross-work-item reuse of the same `event_id` raises `EVENT_ID_GLOBAL_COLLISION`.
 
 - BR-13: **Per-project schema isolation is a load-bearing assumption, with a documented migration path.** The "one Postgres schema per project" choice (FR-19) is what makes cross-project queries impossible by construction (BR-04) and gives clean backup/restore boundaries. One shared database keeps the connection pool count constant regardless of project count. At homelab scale (≤10 projects, single operator, current design context), this is correct. It is NOT correct at multi-team / multi-org scale: hundreds of schemas can still be managed but a `tenant_id`-in-shared-schema model with row-level security becomes preferable. The public API (§19) is shaped so this boundary can shift without API changes: a `Substrate` handle owns one logical project namespace; whether that namespace maps to a dedicated schema or to a `tenant_id` partition within a shared schema protected by row-level security is internal. A future migration to tenant_id-in-shared-schema requires a one-time data move per project plus addition of a `project_id` column scoped by RLS to `events`, `work_items_current`, `claims`, `hook_queue`, `hook_dead_letter`, `workflow_registry`. No FR signature changes. Consumers should not assume schema-per-project as a permanent fixture; if a deployment approaches the operational pain threshold (subjective, but ~30+ projects is a fair signal), plan the migration before it compounds.
 
@@ -337,7 +337,7 @@ When resolving any of these during implementation, the implementing agent must e
 | Hook dispatch contract | Decided | Sync hooks (in-process, gate transaction, 5s default timeout) AND async hooks (queue table + LISTEN/NOTIFY + always-on polling). Project picks per-hook in workflow def. |
 | Deployment shape | Decided | Library. Substrate is imported and called as Python; runs in-process; talks directly to Postgres. Non-Python projects deferred (migration to sidecar would be additive). |
 | Workflow file composition | Deferred with flexibility | Single-file workflows in v1. Loader can grow `!include` / merge conventions later without breaking existing files. |
-| Schema partitioning policy | Deferred with flexibility | No partitioning in v1. Month-partition the `events` table when volume justifies; cheap to add. |
+| Schema partitioning policy | Single flat table | Migration 014 restored non-partitioned `events` with global `UNIQUE(event_id)`. Re-partitioning is a known recipe if a project exceeds ~10M events/month. |
 | Actor → allowed_roles mapping | Decided | Implemented as FR-24 (Phase 3). `actor_roles` table; opt-in enforcement; backward compatible. Closes BR-09. |
 | `continue_on_revoked` replay flag | Decided | Implemented as FR-25 (Phase 3). Replay skips revoked-key events with warning logging when flag is `True`. |
 | Postgres version | Decided | Postgres 15+ required. No earlier-version compatibility guarantee. |
@@ -378,7 +378,7 @@ When resolving any of these during implementation, the implementing agent must e
 - AC-21 [FR-21]: Every substrate operation produces a structured log with the specified fields. Prometheus counters are exposed and increment on the corresponding events.
 - AC-22 [FR-22]: Link create with cross-project target rejects. Link create with disallowed type for the work-item-type pair rejects. Valid link creates and emits `link_created`. Target in terminal state still allowed.
 - AC-23 [FR-23]: Link remove emits `link_removed`. Prior link history remains in event log.
-- AC-24 [BR-12 / FR-03]: Calling event append twice with the same `event_id` produces exactly one row in `events`. The second call returns the result of the first deterministically. Same property for `event_id` on transition, claim acquire, claim release, and link create / remove (all event-emitting mutations). `heartbeat_claim` is structurally idempotent (repeated heartbeats from the same claim-holder extend TTL without producing duplicate effects) and does not take an explicit key.
+- AC-24 [BR-12 / FR-03]: Calling event append twice with the same `event_id` produces exactly one row in `events`. The second call returns the result of the first deterministically. Same property for `event_id` on transition, claim acquire, claim release, and link create / remove (all event-emitting mutations). `heartbeat_claim` is structurally idempotent (repeated heartbeats from the same claim-holder extend TTL without producing duplicate effects) and does not take an explicit key; it may emit a `claim_heartbeat` event subject to coalescing (§17.10).
 - AC-25 [FR-03]: Calling event append with `expected_event_seq` not equal to `current_max(event_seq) + 1` for the work-item rejects with "concurrent modification."
 - AC-26 [FR-15]: Re-verifying a stored event's signature uses the stored `canonical_envelope` bytes, not jsonb re-serialization. A simulated jsonb-formatting change (e.g., key reordering on round-trip) does NOT invalidate previously verified events.
 - AC-27 [FR-16]: `replay_report_<ts>` contains exactly one row per work-item processed, categorized as `replayed_ok`, `replayed_drift`, or `halted`. Drift count of zero is the success criterion for a no-bug projection.
@@ -412,7 +412,7 @@ When resolving any of these during implementation, the implementing agent must e
 - **Phase 1 (MVP):** FR-01, FR-02, FR-03, FR-04, FR-05, FR-05b, FR-06, FR-07, FR-08, FR-09a, FR-09b, FR-11, FR-12, FR-15, FR-16, FR-17, FR-19, FR-20, FR-21, FR-22, FR-23 — substrate replaces `reasoning.log` for one Software Factory workflow with durable claims, role enforcement, replay, structured work-item discovery, and observability.
 - **Phase 2 (Fast-follow):** FR-10 (escalation flag), FR-13 (hooks), FR-14 (dead-letter requeue), FR-18 (lint helper) — adds reactivity once consumers exist.
 - **Phase 3 (Authorization + replay resilience):** FR-24 (actor → allowed_roles enforcement), FR-25 (continue-on-revoked replay flag) — closes BR-09; makes replay practical after key rotation.
-- **Phase 4 (Future):** Federated UI; OIDC verifier; workflow file composition; month-partitioning for high-volume projects.
+- **Phase 4 (Future):** Federated UI; OIDC verifier; workflow file composition; operator-driven archival.
 
 ### Implementation Phasing — owned by the implementing agent
 
@@ -486,14 +486,13 @@ The implementing agent determines build sequence based on architectural dependen
 - **(v4)** Isolation model updated: schema-per-project (one database, one schema per project) replaces the originally specified DB-per-project. Connection pool shared across all projects; `SET LOCAL search_path` scopes each transaction. FR-19, BR-13, and §10 decisions table updated accordingly. Rationale: eliminates per-project connection pools, reduces operational overhead, maintains the same isolation guarantees via engine-enforced `search_path`.
 - **(v4)** Actor → allowed_roles enforcement (FR-24): opt-in enforcement via `actor_roles` table. Actors with no registered roles are trusted; actors with registered roles must claim a role in their set. Closes BR-09.
 - **(v4)** Continue-on-revoked replay flag (FR-25): `replay(continue_on_revoked=True)` skips revoked-key events with warnings instead of halting. `ReplayReport.warnings` tracks count.
-- **(v4)** Postgres version pinned to 15+. Retention policy: always-grow at homelab scale; month-partition at 1M events.
+- **(v4)** Postgres version pinned to 15+. Retention policy: always-grow at homelab scale; re-partition at ~10M events/month if needed.
 - **(v4)** `update_not_before()` API (FR-26): closes the spec gap where `not_before_set` events existed in replay but no API could produce them. Emits event, updates projection, supports idempotency.
 - **(v4)** Custom field validation at transitions (FR-27): extends creation-time validation (FR-02) to the update path. Rejects unknown fields and type mismatches in `custom_fields_update`.
 
 **Pending / deferred:**
-- Event log retention policy: always-grow at homelab scale; month-partition at 1M events per project (see §16).
+- Event log retention policy: always-grow at homelab scale; re-partition at ~10M events/month if needed (see §16).
 - Workflow file composition (`!include`): deferred; loader extension is additive.
-- Schema partitioning for `events` table: deferred; cheap to add when volume warrants (see §16 for trigger threshold).
 - `--continue-on-revoked` replay flag: ~~deferred operator-tooling concern~~ **Implemented as FR-25.**
 - OIDC verifier implementation: deferred until human users arrive.
 - Sidecar / non-Python integration: deferred until needed.
@@ -516,7 +515,7 @@ What would be required to reach Level 3:
 
 - ~~Resolve domain-expert review pass: distributed-systems correctness review of the event-sourcing + transactional-projection model, the sync/async hook semantics, the claim race conditions, and the replay-into-fresh-table approach.~~ **Resolved v2.** Two-reviewer correctness pass completed.
 - ~~Decide actor → `allowed_roles` mapping concretely (in or out for v2; if in, the data model adjustment needed).~~ **Resolved v4.** Implemented as FR-24. Opt-in enforcement via `actor_roles` table. Backward compatible.
-- Decide event log retention policy concretely (always-grow vs. month-partition trigger threshold vs. archival-to-cold-storage SOP). **Deferred with guidance:** always-grow is correct for homelab scale (≤10k work-items, ≤100k events per project). Month-partition the `events` table when any single project exceeds 1M events. Operator-driven archival is a separate concern. No substrate code change needed for partitioning — Postgres declarative partitioning with `PARTITION BY RANGE (timestamp)` is a one-time migration per project.
+- Decide event log retention policy concretely (always-grow vs. re-partition trigger threshold vs. archival-to-cold-storage SOP). **Deferred with guidance:** always-grow is correct for homelab scale (≤10k work-items, ≤100k events per project). Re-partitioning is a known recipe if a single project exceeds ~10M events/month. Operator-driven archival is a separate concern. Migration 014 restored a single flat `events` table; re-introducing partitioning later is a focused 1–2 week project when actually needed.
 - Decide on a workflow file composition mechanism if and when needed (or formally drop it). **Deferred.** Single-file workflows in v1. Loader can grow `!include` / merge conventions later without breaking existing files. No concrete need identified.
 - Pin Postgres major version supported and document the matrix. **Decided v4.** Postgres 15+ required (used in test infrastructure; features used: JSONB, LISTEN/NOTIFY, `FOR UPDATE` row locks, declarative partitioning available when needed). No Postgres-14-or-earlier compatibility guarantee.
 - Decide initial workflow definition for the first Software Factory pilot — needed before MVP can ship, but is a downstream artifact, not a substrate concern. **Not a substrate decision.** Operator defines the pilot workflow.
@@ -609,7 +608,11 @@ The federated UI and downstream consumers should surface this distinction visual
 
 ### 17.10 Heartbeat invariant
 
-Heartbeats (`heartbeat_claim`, FR-07) mutate `claim_expires_at` on `work_items_current` **without emitting an event**. This makes `claim_expires_at` the one mutable projection field that replay cannot reconstruct from the event log. Replay (`_replay.py`) intentionally excludes `claim_expires_at` from `_states_match` comparison. A NULL `claim_expires_at` with a non-NULL `claimed_by` is treated as non-expired by `resolve_heartbeat`; this is by design (the claim row in `claims` is the authoritative source for claim liveness, not the projection column). Do not "fix" replay to derive `claim_expires_at` — doing so would silently break the invariant and produce false drift reports.
+Heartbeats (`heartbeat_claim`, FR-07) extend `claim_expires_at` by `ttl_seconds`. Since BC-194, heartbeats emit a `claim_heartbeat` event **coalesced** on a threshold: a heartbeat event is appended only when `(new_expires_at - last_emitted_expires_at) >= threshold`. The default threshold is `max(60s, ttl_seconds/2)`; callers may override via the `coalesce_threshold` parameter.
+
+This makes `claim_expires_at` replayable within a bounded tolerance: replay updates `derived_claim_expires_at` on each `claim_heartbeat` event, and drift detection tolerates differences up to the last emitted threshold. The `claims` row remains the authoritative source for live claim liveness; the projection column is a cache.
+
+Between coalesced heartbeats, the live `claim_expires_at` may be ahead of the replayed value by up to `coalesce_threshold`. This is expected and not reported as drift. A NULL `claim_expires_at` with a non-NULL `claimed_by` is treated as non-expired by `resolve_heartbeat`; this is by design.
 
 ---
 

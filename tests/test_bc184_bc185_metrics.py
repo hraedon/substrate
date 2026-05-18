@@ -295,8 +295,8 @@ class TestMaintenanceCounters:
             sub.close()
             drop_project_schema(DSN, project)
 
-    def test_maintenance_partitions_created_counter(self):
-        """ensure_event_partitions increments substrate_maintenance_partitions_created_total."""
+    def test_maintenance_partitions_created_counter_deprecated(self):
+        """ensure_event_partitions is a no-op after migration 014."""
         from prometheus_client import CollectorRegistry
 
         from substrate import Substrate
@@ -309,7 +309,7 @@ class TestMaintenanceCounters:
         )
         try:
             names = sub.ensure_event_partitions(months_ahead=2)
-            assert len(names) >= 1
+            assert names == []
 
             samples = {
                 s.name: s.value
@@ -317,8 +317,7 @@ class TestMaintenanceCounters:
                 for s in m.samples
                 if s.labels.get("project") == project
             }
-            assert "substrate_maintenance_partitions_created_total" in samples
-            assert samples["substrate_maintenance_partitions_created_total"] >= 1.0
+            assert "substrate_maintenance_partitions_created_total" not in samples
         finally:
             sub.close()
             drop_project_schema(DSN, project)

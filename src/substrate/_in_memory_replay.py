@@ -38,6 +38,17 @@ def _ts_equal(a: datetime | None, b: datetime | None) -> bool:
     return a == b
 
 
+def _ts_equal_within(
+    a: datetime | None, b: datetime | None, threshold_seconds: float,
+) -> bool:
+    if a is None and b is None:
+        return True
+    if a is None or b is None:
+        return False
+    diff = abs((a.astimezone(UTC) - b.astimezone(UTC)).total_seconds())
+    return diff <= threshold_seconds
+
+
 def in_memory_replay(
     work_items: dict,
     workflows: dict,
@@ -85,6 +96,8 @@ def in_memory_replay(
             derived_last_seq = 0
             derived_attempt_number = 0
             derived_claimed_by = None
+            derived_claim_expires_at = None
+            derived_coalesce_threshold = 0.0
             for evt in sorted(evts, key=lambda e: e.event_seq):
                 if key_set is not None:
                     key_entry = None
@@ -128,7 +141,7 @@ def in_memory_replay(
                         )
                 elif evt.transition in (
                     "claim_acquired", "claim_released", "claim_expired",
-                    "claim_stolen", "link_created", "link_removed",
+                    "claim_stolen", "claim_heartbeat", "link_created", "link_removed",
                     "hook_dead_lettered",
                 ):
                     if evt.transition in ("claim_acquired", "claim_stolen"):
@@ -136,11 +149,25 @@ def in_memory_replay(
                     if evt.transition == "claim_acquired":
                         p = evt.payload or {}
                         derived_claimed_by = p.get("actor_id")
+                        expires_str = p.get("expires_at")
+                        if expires_str:
+                            derived_claim_expires_at = datetime.fromisoformat(expires_str)
                     elif evt.transition == "claim_stolen":
                         p = evt.payload or {}
                         derived_claimed_by = p.get("new_actor_id")
+                        expires_str = p.get("expires_at")
+                        if expires_str:
+                            derived_claim_expires_at = datetime.fromisoformat(expires_str)
+                    elif evt.transition == "claim_heartbeat":
+                        p = evt.payload or {}
+                        expires_str = p.get("expires_at")
+                        if expires_str:
+                            derived_claim_expires_at = datetime.fromisoformat(expires_str)
+                        derived_coalesce_threshold = p.get("coalesce_threshold") or 0.0
                     elif evt.transition in ("claim_released", "claim_expired"):
                         derived_claimed_by = None
+                        derived_claim_expires_at = None
+                        derived_coalesce_threshold = 0.0
                 elif evt.transition == "escalated":
                     derived_needs_review = True
                 elif evt.transition == "not_before_set":
@@ -188,6 +215,10 @@ def in_memory_replay(
             halted += 1
         else:
             if derived_state is not None:
+                live_expires = wi.get("claim_expires_at")
+                expires_match = _ts_equal_within(
+                    derived_claim_expires_at, live_expires, derived_coalesce_threshold,
+                )
                 if (
                     derived_state != wi["current_state"]
                     or derived_fields != (wi["custom_fields"] or {})
@@ -196,9 +227,7 @@ def in_memory_replay(
                     or derived_last_seq != wi.get("last_event_seq", 0)
                     or derived_attempt_number != wi.get("attempt_number", 0)
                     or derived_claimed_by != wi.get("claimed_by")
-                    # claim_expires_at excluded — see _replay._states_match.
-                    # Heartbeats mutate live without emitting an event, so this
-                    # field cannot be reconstructed from the event stream.
+                    or not expires_match
                 ):
                     drift += 1
                 else:

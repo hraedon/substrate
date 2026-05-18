@@ -40,21 +40,7 @@ class Metrics:
         return self._status_gauges[name]
 
     def set_gauge(self, name: str, project: str, value: float) -> None:
-        gauges = {
-            "events_default_rows": (
-                "substrate_events_default_rows",
-                "Number of rows in events_default catch-all partition",
-            ),
-            "events_partition_horizon_days": (
-                "substrate_events_partition_horizon_days",
-                "Days until the latest known events partition upper bound",
-            ),
-        }
-        if name in gauges:
-            metric_name, doc = gauges[name]
-            self._gauge(metric_name, doc).labels(project=project).set(value)
-        else:
-            log.warning("metrics.unknown_gauge", name=name)
+        log.warning("metrics.unknown_gauge", name=name)
 
     def set_hook_queue_depth(self, project: str, status: str, value: float) -> None:
         """Update the hook_queue_depth gauge for a specific (project, status) label pair."""
@@ -163,10 +149,6 @@ class Metrics:
             "maintenance_hook_leases_swept": (
                 "substrate_maintenance_hook_leases_swept_total",
                 "Stranded hook leases recovered by maintenance",
-            ),
-            "maintenance_partitions_created": (
-                "substrate_maintenance_partitions_created_total",
-                "Event partitions created by maintenance",
             ),
             "maintenance_recurrences_fired": (
                 "substrate_maintenance_recurrences_fired_total",

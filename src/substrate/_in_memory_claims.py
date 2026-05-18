@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 
 from ._contract import (
     Jsonb,
+    compute_coalesce_threshold,
     resolve_claim_acquire,
     resolve_heartbeat,
     should_escalate,
@@ -88,13 +89,16 @@ def in_memory_acquire_claim(
 
 
 def in_memory_heartbeat_claim(
+    store,
     work_items: dict,
     claims: dict,
+    key_set,
     work_item_id: uuid.UUID,
     actor_id: str,
     ttl_seconds: int = 300,
     *,
     expected_attempt_number: int | None = None,
+    coalesce_threshold: float | None = None,
 ) -> Claim:
     validate_mutation_params(actor_id=actor_id, ttl_seconds=ttl_seconds)
     now = datetime.now(UTC)
@@ -110,8 +114,35 @@ def in_memory_heartbeat_claim(
         now=now,
     )
 
-    claim["expires_at"] = result.new_expires_at
+    threshold = compute_coalesce_threshold(ttl_seconds, coalesce_threshold)
+    last_emitted = claim.get("last_heartbeat_emitted_at") if claim else None
+    should_emit = (
+        last_emitted is None
+        or (result.new_expires_at - last_emitted).total_seconds() >= threshold
+    )
+
     wi = work_items.get(work_item_id)
+    if should_emit and wi is not None and key_set is not None:
+        _store_append(
+            store,
+            work_item_id=wi["work_item_id"],
+            actor_id=actor_id,
+            actor_kind="agent",
+            actor_metadata=None,
+            workflow_name=wi["workflow_name"],
+            workflow_version=wi["workflow_version"],
+            transition="claim_heartbeat",
+            payload=Jsonb({
+                "actor_id": actor_id,
+                "expires_at": result.new_expires_at.isoformat(),
+                "coalesce_threshold": threshold,
+            }),
+            event_id=uuid.uuid4(),
+            key_set=key_set,
+        )
+        claim["last_heartbeat_emitted_at"] = result.new_expires_at
+
+    claim["expires_at"] = result.new_expires_at
     if wi is not None:
         wi["claim_expires_at"] = result.new_expires_at
 

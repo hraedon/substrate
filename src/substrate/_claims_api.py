@@ -44,12 +44,14 @@ def acquire_claim(
 
 def heartbeat_claim(
     mgr,
+    keys,
     project: str,
     work_item_id: uuid.UUID,
     actor_id: str,
     ttl_seconds: int = 300,
     *,
     expected_attempt_number: int | None = None,
+    coalesce_threshold: float | None = None,
 ):
     from ._claims import heartbeat_claim as _heartbeat
 
@@ -59,6 +61,8 @@ def heartbeat_claim(
             claim = _heartbeat(
                 conn, work_item_id, actor_id, ttl_seconds,
                 expected_attempt_number=expected_attempt_number,
+                key_set=keys,
+                coalesce_threshold=coalesce_threshold,
             )
         timer.log("ok", work_item_id=str(work_item_id))
         return claim

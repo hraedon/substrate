@@ -232,7 +232,7 @@ class TestCheckIdempotency:
         evt = _make_event(actor_id="a1", transition="approve", work_item_id=wi1)
         with pytest.raises(SubstrateError) as exc_info:
             check_idempotency(evt, "a1", "approve", work_item_id=wi2)
-        assert exc_info.value.code == ErrorCode.IDEMPOTENCY_COLLISION_WITH_DIFFERENT_PAYLOAD
+        assert exc_info.value.code == ErrorCode.EVENT_ID_GLOBAL_COLLISION
         assert str(wi2) in exc_info.value.message
 
     def test_work_item_id_match_passes(self):

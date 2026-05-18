@@ -94,11 +94,9 @@ class Substrate:
             pool_max_lifetime: Maximum connection lifetime in seconds.
             require_ssl: Reject the connection if SSL is not active.
             prometheus_registry: Optional ``prometheus_client.CollectorRegistry``.
-            auto_partition: If ``True`` (default), call
-                ``ensure_event_partitions(months_ahead=3)`` at init so the
-                current and next 3 months always have covering partitions.
-                Set to ``False`` to manage partitions externally (e.g. via
-                the CLI cron command).
+            auto_partition: Deprecated. Partitioning was removed in migration
+                014; this parameter is kept for backwards compatibility and
+                has no effect.
 
         Raises:
             SubstrateError: If migrations are pending or workflow versions are
@@ -165,8 +163,8 @@ class Substrate:
             pool_max: Maximum connection-pool size.
             pool_max_lifetime: Maximum connection lifetime in seconds.
             prometheus_registry: Optional ``prometheus_client.CollectorRegistry``.
-            auto_partition: Passed through to ``Substrate.__init__``; see that
-                docstring for details.
+            auto_partition: Deprecated. Has no effect; kept for backwards
+                compatibility.
 
         Returns:
             A connected ``Substrate`` instance.
@@ -195,32 +193,8 @@ class Substrate:
         )
 
     def _run_auto_partition(self) -> None:
-        """Ensure partitions for the next 3 months, check for spill, and update metrics."""
-        from ._events import (
-            count_events_default as _count_default,
-        )
-        from ._events import (
-            ensure_event_partitions as _ensure,
-        )
-        from ._events import (
-            partition_horizon_days as _horizon_days,
-        )
-
-        with self._mgr.transaction() as conn:
-            _ensure(conn, months_ahead=3)
-            default_count = _count_default(conn)
-            horizon = _horizon_days(conn, schema=self._mgr.schema)
-
-        if default_count > 0:
-            log.warning(
-                "partitions.default_partition_non_empty",
-                count=default_count,
-                schema=self._mgr.schema,
-            )
-
-        self._metrics.set_gauge("events_default_rows", self._project, default_count)
-        if horizon is not None:
-            self._metrics.set_gauge("events_partition_horizon_days", self._project, horizon)
+        """No-op. Partitioning was removed in migration 014."""
+        log.warning("auto_partition.deprecated", project=self._project)
 
     def close(self) -> None:
         """Stop hook consumer (if running) and release the connection pool."""
@@ -311,47 +285,18 @@ class Substrate:
             )
 
     def ensure_event_partitions(self, months_ahead: int = 3) -> list[str]:
-        """Idempotently pre-create monthly event partitions.
+        """Deprecated. Partitioning was removed in migration 014.
 
-        Creates partitions for the current month and ``months_ahead``
-        additional months. Safe to call repeatedly; existing partitions are
-        skipped. Call this on the same cadence as ``sweep_expired_claims``
-        (e.g. daily or hourly) to ensure there is always a covering partition.
-
-        Also updates the ``substrate_events_default_rows`` and
-        ``substrate_events_partition_horizon_days`` Prometheus gauges.
+        This method is kept for backwards compatibility and has no effect.
 
         Args:
-            months_ahead: Number of future months to pre-create beyond the
-                current month (default 3).
+            months_ahead: Ignored.
 
         Returns:
-            List of partition table names that were processed (including
-            already-existing ones).
+            Empty list.
         """
-        from ._events import (
-            count_events_default as _count_default,
-        )
-        from ._events import (
-            ensure_event_partitions as _ensure,
-        )
-        from ._events import (
-            partition_horizon_days as _horizon_days,
-        )
-
-        with self._mgr.transaction() as conn:
-            names = _ensure(conn, months_ahead)
-            default_count = _count_default(conn)
-            horizon = _horizon_days(conn, schema=self._mgr.schema)
-
-        self._metrics.set_gauge("events_default_rows", self._project, default_count)
-        if horizon is not None:
-            self._metrics.set_gauge("events_partition_horizon_days", self._project, horizon)
-        if names:
-            self._metrics.inc(
-                "maintenance_partitions_created", self._project, amount=len(names)
-            )
-        return names
+        log.warning("ensure_event_partitions.deprecated", project=self._project)
+        return []
 
     def claim_hooks(
         self,
@@ -858,6 +803,7 @@ class Substrate:
         ttl_seconds: int = 300,
         *,
         expected_attempt_number: int | None = None,
+        coalesce_threshold: float | None = None,
     ) -> Claim:
         """Renew a claim's TTL. Rejects if claim is held by a different actor.
 
@@ -866,6 +812,8 @@ class Substrate:
             actor_id: Must match the current claim holder.
             ttl_seconds: New lease duration.
             expected_attempt_number: Detect stale sessions after claim theft.
+            coalesce_threshold: Minimum seconds between emitted ``claim_heartbeat``
+                events. ``None`` (default) uses ``max(60, ttl_seconds/2)``.
 
         Returns:
             The renewed ``Claim``.
@@ -877,9 +825,10 @@ class Substrate:
         _validate_mutation_params(actor_id=actor_id, ttl_seconds=ttl_seconds)
         from ._claims_api import heartbeat_claim as _impl
         return _impl(
-            self._mgr, self._project,
+            self._mgr, self._keys, self._project,
             work_item_id, actor_id, ttl_seconds,
             expected_attempt_number=expected_attempt_number,
+            coalesce_threshold=coalesce_threshold,
         )
 
     def release_claim(

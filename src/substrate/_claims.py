@@ -8,6 +8,7 @@ from psycopg.sql import SQL
 
 from ._contract import (
     Jsonb,
+    compute_coalesce_threshold,
     resolve_claim_acquire,
     resolve_heartbeat,
     should_escalate,
@@ -190,10 +191,12 @@ def heartbeat_claim(
     actor_id: str,
     ttl_seconds: int,
     expected_attempt_number: int | None = None,
+    key_set: KeySet | None = None,
+    coalesce_threshold: float | None = None,
 ) -> Claim:
-    from ._events import lock_work_item
+    from ._events import append_event, lock_work_item
 
-    lock_work_item(conn, work_item_id)
+    wi = lock_work_item(conn, work_item_id)
 
     claim_row = conn.execute(
         SQL("SELECT * FROM claims WHERE work_item_id = %s"),
@@ -210,10 +213,45 @@ def heartbeat_claim(
         now=now,
     )
 
-    conn.execute(
-        SQL("UPDATE claims SET expires_at = %s WHERE work_item_id = %s"),
-        [result.new_expires_at, work_item_id],
+    threshold = compute_coalesce_threshold(ttl_seconds, coalesce_threshold)
+    last_emitted = claim_row["last_heartbeat_emitted_at"] if claim_row else None
+    should_emit = (
+        last_emitted is None
+        or (result.new_expires_at - last_emitted).total_seconds() >= threshold
     )
+
+    if should_emit and wi is not None and key_set is not None:
+        append_event(
+            conn=conn,
+            work_item_id=work_item_id,
+            actor_id=actor_id,
+            actor_kind="agent",
+            actor_metadata=None,
+            key_set=key_set,
+            workflow_name=wi["workflow_name"],
+            workflow_version=wi["workflow_version"],
+            transition="claim_heartbeat",
+            payload=Jsonb({
+                "actor_id": actor_id,
+                "expires_at": result.new_expires_at.isoformat(),
+                "coalesce_threshold": threshold,
+            }),
+            event_id=uuid.uuid4(),
+            _prelocked_wi=wi,
+        )
+        conn.execute(
+            SQL(
+                "UPDATE claims SET expires_at = %s, last_heartbeat_emitted_at = %s "
+                "WHERE work_item_id = %s"
+            ),
+            [result.new_expires_at, result.new_expires_at, work_item_id],
+        )
+    else:
+        conn.execute(
+            SQL("UPDATE claims SET expires_at = %s WHERE work_item_id = %s"),
+            [result.new_expires_at, work_item_id],
+        )
+
     conn.execute(
         SQL("UPDATE work_items_current SET claim_expires_at = %s WHERE work_item_id = %s"),
         [result.new_expires_at, work_item_id],

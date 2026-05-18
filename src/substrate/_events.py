@@ -1,22 +1,16 @@
 from __future__ import annotations
 
-import hashlib
 import uuid
-from datetime import UTC, date, datetime
+from datetime import datetime
 
 import psycopg
-from psycopg.sql import SQL, Identifier
+from psycopg.sql import SQL
 
 from ._contract import Jsonb
 from ._errors import ErrorCode, SubstrateError
 from ._keys import KeySet
 from ._signing import sign_event
 from ._types import Event
-
-
-def _advisory_lock_id(event_id: uuid.UUID) -> int:
-    raw = event_id.bytes
-    return int.from_bytes(hashlib.sha256(raw).digest()[:8], "big") & 0x7FFFFFFFFFFFFFFF
 
 _EVENT_FIELDS = (
     "event_id, work_item_id, event_seq, actor_id, actor_kind, "
@@ -139,7 +133,6 @@ def append_event(
     )
 
     event_seq = next_seq
-    conn.execute(SQL("SELECT pg_advisory_xact_lock(%s)"), [_advisory_lock_id(event_id)])
     try:
         row = conn.execute(
             SQL(
@@ -174,7 +167,7 @@ def append_event(
         if existing is not None:
             return existing
         raise SubstrateError(
-            ErrorCode.IDEMPOTENCY_COLLISION_WITH_DIFFERENT_PAYLOAD,
+            ErrorCode.EVENT_ID_GLOBAL_COLLISION,
             f"event_id {event_id} already exists",
         )
 
@@ -263,7 +256,6 @@ def append_transition_event(
     workflow_name = wi_row["workflow_name"]
     workflow_version = wi_row["workflow_version"]
 
-    conn.execute(SQL("SELECT pg_advisory_xact_lock(%s)"), [_advisory_lock_id(event_id)])
     try:
         row = conn.execute(
             SQL(
@@ -298,7 +290,7 @@ def append_transition_event(
         if existing is not None:
             return existing
         raise SubstrateError(
-            ErrorCode.IDEMPOTENCY_COLLISION_WITH_DIFFERENT_PAYLOAD,
+            ErrorCode.EVENT_ID_GLOBAL_COLLISION,
             f"event_id {event_id} already exists",
         )
 
@@ -359,58 +351,32 @@ def read_events_by_work_item(
     before_seq: int | None = None,
     after_seq: int | None = None,
 ) -> list[Event]:
-    ts_row = conn.execute(
-        SQL(
-            "SELECT last_event_at FROM work_items_current WHERE work_item_id = %s"
-        ),
-        [work_item_id],
-    ).fetchone()
-    ts_upper = ts_row["last_event_at"] if ts_row else None
-
     if before_seq is not None:
-        clauses = ["work_item_id = %s", "event_seq < %s"]
-        params: list = [work_item_id, before_seq]
-        if ts_upper is not None:
-            clauses.append("timestamp <= %s")
-            params.append(ts_upper)
-        params.append(limit)
         rows = conn.execute(
             SQL(
                 f"SELECT {_EVENT_FIELDS} FROM events "
-                "WHERE " + " AND ".join(clauses)
-                + " ORDER BY event_seq DESC LIMIT %s"
+                "WHERE work_item_id = %s AND event_seq < %s"
+                " ORDER BY event_seq DESC LIMIT %s"
             ),
-            params,
+            [work_item_id, before_seq, limit],
         ).fetchall()
     elif after_seq is not None:
-        clauses = ["work_item_id = %s", "event_seq > %s"]
-        params = [work_item_id, after_seq]
-        if ts_upper is not None:
-            clauses.append("timestamp <= %s")
-            params.append(ts_upper)
-        params.append(limit)
         rows = conn.execute(
             SQL(
                 f"SELECT {_EVENT_FIELDS} FROM events "
-                "WHERE " + " AND ".join(clauses)
-                + " ORDER BY event_seq ASC LIMIT %s"
+                "WHERE work_item_id = %s AND event_seq > %s"
+                " ORDER BY event_seq ASC LIMIT %s"
             ),
-            params,
+            [work_item_id, after_seq, limit],
         ).fetchall()
     else:
-        clauses = ["work_item_id = %s"]
-        params = [work_item_id]
-        if ts_upper is not None:
-            clauses.append("timestamp <= %s")
-            params.append(ts_upper)
-        params.append(limit)
         rows = conn.execute(
             SQL(
                 f"SELECT {_EVENT_FIELDS} FROM events "
-                "WHERE " + " AND ".join(clauses)
-                + " ORDER BY event_seq DESC LIMIT %s"
+                "WHERE work_item_id = %s"
+                " ORDER BY event_seq DESC LIMIT %s"
             ),
-            params,
+            [work_item_id, limit],
         ).fetchall()
     if after_seq is not None:
         return [_row_to_event(r) for r in rows]
@@ -517,95 +483,4 @@ def read_events_composite(
     return [_row_to_event(r) for r in rows]
 
 
-def ensure_event_partitions(conn: psycopg.Connection, months_ahead: int = 3) -> list[str]:
-    from psycopg.sql import Literal as SqlLiteral
 
-    today = datetime.now(UTC).date()
-    year = today.year
-    month = today.month
-
-    created = []
-    for _ in range(months_ahead + 1):
-        start = date(year, month, 1)
-        if month == 12:
-            end = date(year + 1, 1, 1)
-        else:
-            end = date(year, month + 1, 1)
-        partition_name = f"events_y{year:04d}_m{month:02d}"
-        conn.execute(
-            SQL(
-                "CREATE TABLE IF NOT EXISTS {} PARTITION OF events "
-                "FOR VALUES FROM ({}) TO ({})"
-            ).format(
-                Identifier(partition_name),
-                SqlLiteral(start.isoformat()),
-                SqlLiteral(end.isoformat()),
-            ),
-        )
-        created.append(partition_name)
-        if month == 12:
-            year += 1
-            month = 1
-        else:
-            month += 1
-    return created
-
-
-def count_events_default(conn: psycopg.Connection) -> int:
-    """Return the number of rows in the events_default catch-all partition."""
-    row = conn.execute("SELECT count(*) AS n FROM events_default").fetchone()
-    return int(row["n"]) if row else 0
-
-
-def partition_horizon_days(conn: psycopg.Connection, schema: str | None = None) -> int | None:
-    """Return the number of days until the upper bound of the latest named partition.
-
-    Args:
-        conn: Active database connection with search_path set to the project schema.
-        schema: Postgres schema name. When provided, restricts the catalog look-up
-            to that schema so queries work correctly across multi-project databases.
-            When ``None``, the current search_path schema is resolved via
-            ``current_schema()``.
-
-    Returns ``None`` if no named partitions exist beyond ``events_default``.
-    The bound string from pg_get_expr looks like:
-    ``FOR VALUES FROM ('2026-05-01') TO ('2026-06-01')``
-    We parse the upper bound date from that string.
-    """
-    import re
-
-    if schema is None:
-        schema_row = conn.execute("SELECT current_schema() AS s").fetchone()
-        schema = schema_row["s"] if schema_row else None
-        if schema is None:
-            return None
-
-    row = conn.execute(
-        """
-        SELECT pg_get_expr(c.relpartbound, c.oid) AS bound
-        FROM pg_inherits i
-        JOIN pg_class c ON c.oid = i.inhrelid
-        JOIN pg_class p ON p.oid = i.inhparent
-        JOIN pg_namespace n ON n.oid = p.relnamespace
-        WHERE p.relname = 'events'
-          AND n.nspname = %(schema)s
-          AND c.relname ~ '^events_y[0-9]{4}_m[0-9]{2}$'
-        ORDER BY c.relname DESC
-        LIMIT 1
-        """,
-        {"schema": schema},
-    ).fetchone()
-    if row is None:
-        return None
-    # bound looks like: FOR VALUES FROM ('2026-05-01 00:00:00+00') TO ('2026-06-01 00:00:00+00')
-    # or: FOR VALUES FROM ('2026-05-01') TO ('2026-06-01')
-    bound_str = row["bound"]
-    try:
-        matches = re.findall(r"'(\d{4}-\d{2}-\d{2})[^']*'", bound_str)
-        if len(matches) < 2:
-            return None
-        upper = date.fromisoformat(matches[1])
-        today = datetime.now(UTC).date()
-        return max(0, (upper - today).days)
-    except Exception:
-        return None

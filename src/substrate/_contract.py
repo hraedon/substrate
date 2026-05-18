@@ -18,6 +18,7 @@ _RESERVED_TRANSITIONS = frozenset({
     "claim_stolen",
     "claim_released",
     "claim_expired",
+    "claim_heartbeat",
     "link_created",
     "link_removed",
     "escalated",
@@ -167,7 +168,7 @@ def check_idempotency(
         return None
     if work_item_id is not None and existing_event.work_item_id != work_item_id:
         raise SubstrateError(
-            ErrorCode.IDEMPOTENCY_COLLISION_WITH_DIFFERENT_PAYLOAD,
+            ErrorCode.EVENT_ID_GLOBAL_COLLISION,
             f"event_id {existing_event.event_id} already used for work_item "
             f"{existing_event.work_item_id}, not {work_item_id}",
         )
@@ -336,6 +337,15 @@ class HeartbeatResult:
     new_expires_at: datetime
     acquired_at: datetime
     attempt_number: int
+
+
+_DEFAULT_COALESCE_MIN = 60.0
+
+
+def compute_coalesce_threshold(ttl_seconds: int, override: float | None = None) -> float:
+    if override is not None:
+        return max(0.0, override)
+    return max(_DEFAULT_COALESCE_MIN, ttl_seconds / 2.0)
 
 
 def resolve_heartbeat(

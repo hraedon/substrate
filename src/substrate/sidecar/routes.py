@@ -206,6 +206,7 @@ def register_routes(app, substrate, tokens: TokenRegistry):
             actor_id=actor.actor_id,
             ttl_seconds=body.ttl_seconds,
             expected_attempt_number=body.expected_attempt_number,
+            coalesce_threshold=body.coalesce_threshold,
         )
         return _serialize(result)
 
