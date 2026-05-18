@@ -198,7 +198,11 @@ class Substrate:
         """Ensure partitions for the next 3 months, check for spill, and update metrics."""
         from ._events import (
             count_events_default as _count_default,
+        )
+        from ._events import (
             ensure_event_partitions as _ensure,
+        )
+        from ._events import (
             partition_horizon_days as _horizon_days,
         )
 
@@ -327,7 +331,11 @@ class Substrate:
         """
         from ._events import (
             count_events_default as _count_default,
+        )
+        from ._events import (
             ensure_event_partitions as _ensure,
+        )
+        from ._events import (
             partition_horizon_days as _horizon_days,
         )
 

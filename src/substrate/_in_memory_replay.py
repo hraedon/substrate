@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import structlog
 from datetime import UTC, datetime
+
+import structlog
 
 from ._errors import ErrorCode, SubstrateError
 from ._signing import verify_event as _verify_event
@@ -84,7 +85,6 @@ def in_memory_replay(
             derived_last_seq = 0
             derived_attempt_number = 0
             derived_claimed_by = None
-            derived_claim_expires_at = None
             for evt in sorted(evts, key=lambda e: e.event_seq):
                 if key_set is not None:
                     key_entry = None
@@ -136,24 +136,11 @@ def in_memory_replay(
                     if evt.transition == "claim_acquired":
                         p = evt.payload or {}
                         derived_claimed_by = p.get("actor_id")
-                        expires_str = p.get("expires_at")
-                        derived_claim_expires_at = (
-                            datetime.fromisoformat(expires_str)
-                            if isinstance(expires_str, str)
-                            else expires_str
-                        )
                     elif evt.transition == "claim_stolen":
                         p = evt.payload or {}
                         derived_claimed_by = p.get("new_actor_id")
-                        expires_str = p.get("expires_at")
-                        derived_claim_expires_at = (
-                            datetime.fromisoformat(expires_str)
-                            if isinstance(expires_str, str)
-                            else expires_str
-                        )
                     elif evt.transition in ("claim_released", "claim_expired"):
                         derived_claimed_by = None
-                        derived_claim_expires_at = None
                 elif evt.transition == "escalated":
                     derived_needs_review = True
                 elif evt.transition == "not_before_set":
@@ -195,7 +182,6 @@ def in_memory_replay(
                         if "custom_fields_update" in p:
                             derived_fields = {**derived_fields, **p["custom_fields_update"]}
                         derived_claimed_by = None
-                        derived_claim_expires_at = None
         except SubstrateError:
             halted += 1
         except Exception:

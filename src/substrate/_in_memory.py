@@ -8,8 +8,6 @@ from pathlib import Path
 import structlog
 import yaml
 
-log = structlog.get_logger()
-
 from ._contract import (
     Jsonb,
 )
@@ -36,6 +34,8 @@ from ._workflow import (
     parse_workflow_yaml,
     validate_and_build,
 )
+
+log = structlog.get_logger()
 
 
 class InMemorySubstrate:

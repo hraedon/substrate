@@ -3,7 +3,6 @@ from __future__ import annotations
 import threading
 import time
 import uuid
-from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
 import psycopg
