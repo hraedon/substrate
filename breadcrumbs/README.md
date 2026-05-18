@@ -31,7 +31,10 @@ _(none)_
 
 ## Open
 
-_(none)_
+| # | Title | Severity | Status |
+|---|---|---|---|
+| 184 | Hook queue depth metric missing — no backpressure visibility | medium | proposed |
+| 185 | Maintenance metrics not specified in Plan 009 — operator blind to sweeps | medium | proposed |
 
 ## Resolved
 
