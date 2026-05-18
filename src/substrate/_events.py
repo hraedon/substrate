@@ -549,3 +549,63 @@ def ensure_event_partitions(conn: psycopg.Connection, months_ahead: int = 3) -> 
         else:
             month += 1
     return created
+
+
+def count_events_default(conn: psycopg.Connection) -> int:
+    """Return the number of rows in the events_default catch-all partition."""
+    row = conn.execute("SELECT count(*) AS n FROM events_default").fetchone()
+    return int(row["n"]) if row else 0
+
+
+def partition_horizon_days(conn: psycopg.Connection, schema: str | None = None) -> int | None:
+    """Return the number of days until the upper bound of the latest named partition.
+
+    Args:
+        conn: Active database connection with search_path set to the project schema.
+        schema: Postgres schema name. When provided, restricts the catalog look-up
+            to that schema so queries work correctly across multi-project databases.
+            When ``None``, the current search_path schema is resolved via
+            ``current_schema()``.
+
+    Returns ``None`` if no named partitions exist beyond ``events_default``.
+    The bound string from pg_get_expr looks like:
+    ``FOR VALUES FROM ('2026-05-01') TO ('2026-06-01')``
+    We parse the upper bound date from that string.
+    """
+    import re
+
+    if schema is None:
+        schema_row = conn.execute("SELECT current_schema() AS s").fetchone()
+        schema = schema_row["s"] if schema_row else None
+        if schema is None:
+            return None
+
+    row = conn.execute(
+        """
+        SELECT pg_get_expr(c.relpartbound, c.oid) AS bound
+        FROM pg_inherits i
+        JOIN pg_class c ON c.oid = i.inhrelid
+        JOIN pg_class p ON p.oid = i.inhparent
+        JOIN pg_namespace n ON n.oid = p.relnamespace
+        WHERE p.relname = 'events'
+          AND n.nspname = %(schema)s
+          AND c.relname ~ '^events_y[0-9]{4}_m[0-9]{2}$'
+        ORDER BY c.relname DESC
+        LIMIT 1
+        """,
+        {"schema": schema},
+    ).fetchone()
+    if row is None:
+        return None
+    # bound looks like: FOR VALUES FROM ('2026-05-01 00:00:00+00') TO ('2026-06-01 00:00:00+00')
+    # or: FOR VALUES FROM ('2026-05-01') TO ('2026-06-01')
+    bound_str = row["bound"]
+    try:
+        matches = re.findall(r"'(\d{4}-\d{2}-\d{2})[^']*'", bound_str)
+        if len(matches) < 2:
+            return None
+        upper = date.fromisoformat(matches[1])
+        today = datetime.now(UTC).date()
+        return max(0, (upper - today).days)
+    except Exception:
+        return None

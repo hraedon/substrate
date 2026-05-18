@@ -35,11 +35,19 @@ _(none)_
 |---|---|---|---|
 | 184 | Hook queue depth metric missing — no backpressure visibility | medium | proposed |
 | 185 | Maintenance metrics not specified in Plan 009 — operator blind to sweeps | medium | proposed |
+| 192 | Validator timeout leaks threads; cancel_futures is misleading | medium | proposed |
+| 193 | read_events_by_work_item partition-pruning hack undocumented; NULL fallback scans all | medium | proposed |
+| 194 | heartbeat_claim mutates claim_expires_at without emitting an event | medium | proposed |
+| RFC-001 | Reconcile event_id global-uniqueness spec with partitioned events table | high | proposed |
 
 ## Resolved
 
 | # | Title | Severity | Resolution |
 |---|---|---|---|---|
+| 191 | Migration runner lacks advisory lock and checksum verification | high | Advisory lock via `pg_advisory_lock(2479241334166598476)` wraps `run_migrations`; checksum BYTEA column added via migration 013; NULL legacy rows backfilled silently; non-NULL mismatches raise `MIGRATION_DRIFT`. |
+| 189 | In-memory replay omits claim_expires_at and orphan-event detection | high | Ported orphan-event scan from Postgres replay into in-memory replay (the genuine parity gap). `claim_expires_at` comparison was added then reverted — `heartbeat_claim` mutates the live value without an event, making it structurally non-replayable today; see BC-194. `TestBC189OrphanEventDetection` and parity guard `test_replay_no_drift_with_active_claim` retained. |
+| 188 | ConnectionManager.connect() does not SET search_path — cross-schema DROP risk | high | `connect()` now executes `SET search_path TO {schema}` (session-scoped) before yielding, symmetric with `transaction()`. Regression test in `tests/test_bc188_connect_search_path.py` verifies two-schema isolation for `drop_old_replay_tables`. |
+| 190 | ensure_event_partitions is opt-in; missed cron spills writes to events_default | high | `auto_partition: bool = True` added to `Substrate.__init__` and `create_project`. At init, calls `ensure_event_partitions(months_ahead=3)`, checks `events_default` row count (warns if non-zero), and sets `substrate_events_default_rows` and `substrate_events_partition_horizon_days` Prometheus gauges. In-memory backend: no-op (no partition tables). |
 | 180 | HMAC secrets stored as plaintext in key files — no encrypted/KMS support | medium | Added `log.warning("keys.plaintext_at_rest", ...)` on every `KeySet._load()`. Environment-variable key injection deferred to future session. |
 | 179 | _move_to_dead_letter's append_event has no atomicity with work-item state | low | Fall back to `hook_queue.payload.work_item_id` when `events` row is missing (partition drop / orphan), then resolve `workflow_name`/`workflow_version` from `work_items_current`. Only skips event when work-item itself is gone, logging a warning. |
 | 178 | Sidecar sole-signer middleware reassembles body from stream with no size limit | low | Added `max_body_size = 10MB` guard in `sole_signer_middleware`; returns HTTP 413 when exceeded. Tested with 11MB payload. |

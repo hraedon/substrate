@@ -81,6 +81,7 @@ class Substrate:
         pool_max_lifetime: float | None = None,
         require_ssl: bool = False,
         prometheus_registry=None,
+        auto_partition: bool = True,
     ) -> None:
         """Connect to an existing project.
 
@@ -92,7 +93,12 @@ class Substrate:
             pool_max: Maximum connection-pool size.
             pool_max_lifetime: Maximum connection lifetime in seconds.
             require_ssl: Reject the connection if SSL is not active.
-        prometheus_registry: Optional ``prometheus_client.CollectorRegistry``.
+            prometheus_registry: Optional ``prometheus_client.CollectorRegistry``.
+            auto_partition: If ``True`` (default), call
+                ``ensure_event_partitions(months_ahead=3)`` at init so the
+                current and next 3 months always have covering partitions.
+                Set to ``False`` to manage partitions externally (e.g. via
+                the CLI cron command).
 
         Raises:
             SubstrateError: If migrations are pending or workflow versions are
@@ -128,6 +134,8 @@ class Substrate:
                 metrics=self._metrics,
             )
             check_integrity(self._mgr)
+            if auto_partition:
+                self._run_auto_partition()
         except Exception:
             self._mgr.close()
             raise
@@ -145,6 +153,7 @@ class Substrate:
         pool_max_lifetime: float | None = None,
         require_ssl: bool = False,
         prometheus_registry=None,
+        auto_partition: bool = True,
     ) -> Substrate:
         """Create a new project: schema, migrations, and return a connected handle.
 
@@ -156,6 +165,8 @@ class Substrate:
             pool_max: Maximum connection-pool size.
             pool_max_lifetime: Maximum connection lifetime in seconds.
             prometheus_registry: Optional ``prometheus_client.CollectorRegistry``.
+            auto_partition: Passed through to ``Substrate.__init__``; see that
+                docstring for details.
 
         Returns:
             A connected ``Substrate`` instance.
@@ -180,7 +191,32 @@ class Substrate:
             pool_max_lifetime=pool_max_lifetime,
             require_ssl=require_ssl,
             prometheus_registry=prometheus_registry,
+            auto_partition=auto_partition,
         )
+
+    def _run_auto_partition(self) -> None:
+        """Ensure partitions for the next 3 months, check for spill, and update metrics."""
+        from ._events import (
+            count_events_default as _count_default,
+            ensure_event_partitions as _ensure,
+            partition_horizon_days as _horizon_days,
+        )
+
+        with self._mgr.transaction() as conn:
+            _ensure(conn, months_ahead=3)
+            default_count = _count_default(conn)
+            horizon = _horizon_days(conn, schema=self._mgr.schema)
+
+        if default_count > 0:
+            log.warning(
+                "partitions.default_partition_non_empty",
+                count=default_count,
+                schema=self._mgr.schema,
+            )
+
+        self._metrics.set_gauge("events_default_rows", self._project, default_count)
+        if horizon is not None:
+            self._metrics.set_gauge("events_partition_horizon_days", self._project, horizon)
 
     def close(self) -> None:
         """Stop hook consumer (if running) and release the connection pool."""
@@ -277,6 +313,9 @@ class Substrate:
         skipped. Call this on the same cadence as ``sweep_expired_claims``
         (e.g. daily or hourly) to ensure there is always a covering partition.
 
+        Also updates the ``substrate_events_default_rows`` and
+        ``substrate_events_partition_horizon_days`` Prometheus gauges.
+
         Args:
             months_ahead: Number of future months to pre-create beyond the
                 current month (default 3).
@@ -285,10 +324,21 @@ class Substrate:
             List of partition table names that were processed (including
             already-existing ones).
         """
-        from ._events import ensure_event_partitions as _ensure
+        from ._events import (
+            count_events_default as _count_default,
+            ensure_event_partitions as _ensure,
+            partition_horizon_days as _horizon_days,
+        )
 
         with self._mgr.transaction() as conn:
-            return _ensure(conn, months_ahead)
+            names = _ensure(conn, months_ahead)
+            default_count = _count_default(conn)
+            horizon = _horizon_days(conn, schema=self._mgr.schema)
+
+        self._metrics.set_gauge("events_default_rows", self._project, default_count)
+        if horizon is not None:
+            self._metrics.set_gauge("events_partition_horizon_days", self._project, horizon)
+        return names
 
     def claim_hooks(
         self,

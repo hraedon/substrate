@@ -95,8 +95,19 @@ class ConnectionManager:
 
     @contextmanager
     def connect(self) -> Generator[psycopg.Connection, None, None]:
+        """Yield a raw connection with search_path set to the project schema.
+
+        Uses session-scoped SET (not SET LOCAL) because there is no enclosing
+        transaction block at this level. Each pool checkout overrides the
+        setting, so the next caller always gets a clean path. Callers are
+        responsible for committing or rolling back as needed.
+        """
         with self._pool.connection() as conn:
             self._verify_ssl(conn)
+            conn.execute(
+                SQL("SET search_path TO {}").format(Identifier(self._schema))
+            )
+            conn.commit()
             yield conn
 
     @contextmanager

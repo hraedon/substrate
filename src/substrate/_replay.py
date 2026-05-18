@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 import psycopg
 import structlog
@@ -383,6 +383,32 @@ def _replay_work_item(
     }, warnings
 
 
+def _ts_equal(a: datetime | None, b: datetime | None) -> bool:
+    """Compare two timestamps in a timezone-safe way.
+
+    Postgres returns tz-aware datetimes; replayed values come from
+    datetime.fromisoformat() which may or may not include tzinfo depending
+    on whether the stored string included an offset.  Normalise both to UTC
+    before comparing so that +00:00-suffixed and naive values compare equal.
+    """
+    if a is None and b is None:
+        return True
+    if a is None or b is None:
+        return False
+    a_aware = a.tzinfo is not None
+    b_aware = b.tzinfo is not None
+    if a_aware and b_aware:
+        return a.astimezone(UTC) == b.astimezone(UTC)
+    if not a_aware and not b_aware:
+        return a == b
+    # Mixed: strip tzinfo from the aware side for comparison
+    if a_aware:
+        a = a.astimezone(UTC).replace(tzinfo=None)
+    else:
+        b = b.astimezone(UTC).replace(tzinfo=None)
+    return a == b
+
+
 def _states_match(replayed: dict, live: dict) -> bool:
     if replayed["current_state"] != live["current_state"]:
         return False
@@ -398,6 +424,9 @@ def _states_match(replayed: dict, live: dict) -> bool:
         return False
     if replayed["claimed_by"] != live["claimed_by"]:
         return False
+    # claim_expires_at intentionally excluded — heartbeat_claim mutates live
+    # without emitting an event, so this field is structurally non-replayable
+    # until heartbeats emit a claim_heartbeat event. See BC-189 Resolution.
     return True
 
 
@@ -417,4 +446,5 @@ def _diff_fields(replayed: dict, live: dict) -> list[str]:
         diffs.append("attempt_number")
     if replayed["claimed_by"] != live["claimed_by"]:
         diffs.append("claimed_by")
+    # claim_expires_at omitted from drift detection — see _states_match.
     return diffs

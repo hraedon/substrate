@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -399,6 +400,21 @@ class TestConformanceReplay:
         assert report.replayed_drift == 0
         assert report.replayed_ok >= 1
 
+    def test_replay_no_drift_with_active_claim(self, sub):
+        """An active claim must not trigger drift. (claim_expires_at is excluded
+        from comparison per BC-189; this guards against future regressions where
+        claimed_by or attempt_number diverge on claim acquisition.)"""
+        wi, _ = sub.create_work_item(
+            workflow_name="test_workflow",
+            work_item_type="feature",
+            actor_id="agent-1",
+            custom_fields={"title": "claim-replay"},
+        )
+        sub.acquire_claim(wi.work_item_id, "agent-1", ttl_seconds=300)
+        report = sub.replay()
+        assert report.replayed_drift == 0
+        assert report.replayed_ok >= 1
+
 
 class TestConformanceUpdateNotBefore:
     def test_set_and_clear(self, sub):
@@ -502,3 +518,83 @@ class TestConformanceCustomFieldFilter:
             custom_field_filters={"metadata": {}},
         )
         assert len(page.items) == 2
+
+
+# ---------------------------------------------------------------------------
+# BC-189: in-memory-only tests for claim_expires_at drift and orphan events
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def mem_sub():
+    """Standalone InMemorySubstrate fixture (not parameterized, no Postgres needed)."""
+    s = InMemorySubstrate(project="bc189")
+    s.register_workflow_file(WORKFLOW_PATH)
+    yield s
+    s.close()
+
+
+class TestBC189OrphanEventDetection:
+    """Verify that orphan-event detection in in-memory replay mirrors Postgres behaviour."""
+
+    def test_orphan_with_created_event_counts_as_warning(self, mem_sub):
+        """An orphan work-item whose first event is 'created' is a warning (not halted)."""
+        from substrate._event_store import InMemoryEventStore
+        from substrate._types import Event
+
+        orphan_id = uuid.uuid4()
+        # Inject a synthetic 'created' event directly into the event store
+        # without adding a work-item entry — simulates a deleted work-item row.
+        evt = Event(
+            event_id=uuid.uuid4(),
+            work_item_id=orphan_id,
+            event_seq=1,
+            actor_id="agent-orphan",
+            actor_kind="agent",
+            actor_metadata=None,
+            key_id="in-memory",
+            workflow_name="test_workflow",
+            workflow_version=1,
+            timestamp=datetime.now(UTC),
+            transition="created",
+            payload={"initial_state": "new", "custom_fields": {"title": "orphan"}},
+            payload_canonical_hash=b"\x00" * 32,
+            signature=b"\x00" * 32,
+            canonical_envelope=None,
+        )
+        mem_sub._store.events.setdefault(orphan_id, []).append(evt)
+        # Explicitly ensure no work-item row exists
+        mem_sub._work_items.pop(orphan_id, None)
+
+        report = mem_sub.replay()
+        # The orphan with a 'created' event is a warning, not a halt
+        assert report.halted == 0
+        assert report.warnings >= 1
+
+    def test_orphan_without_created_event_counts_as_halted(self, mem_sub):
+        """An orphan work-item whose events do NOT start with 'created' is halted."""
+        from substrate._types import Event
+
+        orphan_id = uuid.uuid4()
+        # Inject only a non-created event — no 'created' event at seq 1
+        evt = Event(
+            event_id=uuid.uuid4(),
+            work_item_id=orphan_id,
+            event_seq=2,
+            actor_id="agent-orphan",
+            actor_kind="agent",
+            actor_metadata=None,
+            key_id="in-memory",
+            workflow_name="test_workflow",
+            workflow_version=1,
+            timestamp=datetime.now(UTC),
+            transition="start",
+            payload={},
+            payload_canonical_hash=b"\x00" * 32,
+            signature=b"\x00" * 32,
+            canonical_envelope=None,
+        )
+        mem_sub._store.events.setdefault(orphan_id, []).append(evt)
+        mem_sub._work_items.pop(orphan_id, None)
+
+        report = mem_sub.replay()
+        assert report.halted >= 1

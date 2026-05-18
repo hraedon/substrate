@@ -254,7 +254,7 @@ substrate actor-roles list --actor agent-1
 - **Schema-per-project**: one Postgres database, one schema per project, engine-enforced isolation
 - **Library mode**: runs in-process, no HTTP server required; exposes `prometheus_client.CollectorRegistry`
 - **Library is sole signer**: HMAC-SHA256 over RFC 8785 canonical JSON, computed internally
-- **Monthly partitioned events**: automatic partition management via `ensure_event_partitions()`
+- **Monthly partitioned events**: partitions auto-ensured on init (`auto_partition=True`); explicit `ensure_event_partitions()` still available for manual cron use
 - **Single-source-of-truth contract**: shared validation/decision functions in `_contract.py` used by both Postgres and in-memory backends
 - **Property-based testing**: hypothesis-driven conformance tests verify both backends behave identically
 

@@ -1,10 +1,40 @@
 from __future__ import annotations
 
-from datetime import datetime
+import structlog
+from datetime import UTC, datetime
 
 from ._errors import ErrorCode, SubstrateError
 from ._signing import verify_event as _verify_event
 from ._types import ReplayReport
+
+log = structlog.get_logger()
+
+
+def _ts_equal(a: datetime | None, b: datetime | None) -> bool:
+    """Compare two timestamps in a timezone-safe way.
+
+    Converts both to UTC if tz-aware, or compares naively if both naive.
+    Returns True if both are None or if their UTC equivalents are equal.
+    """
+    if a is None and b is None:
+        return True
+    if a is None or b is None:
+        return False
+    # Normalise: if either is tz-aware, convert both to UTC
+    a_aware = a.tzinfo is not None
+    b_aware = b.tzinfo is not None
+    if a_aware and b_aware:
+        return a.astimezone(UTC) == b.astimezone(UTC)
+    if not a_aware and not b_aware:
+        return a == b
+    # Mixed: make the naive one UTC-aware
+    if a_aware:
+        a = a.astimezone(UTC).replace(tzinfo=None)
+        b = b.replace(tzinfo=None) if b.tzinfo is None else b.astimezone(UTC).replace(tzinfo=None)
+    else:
+        b = b.astimezone(UTC).replace(tzinfo=None)
+        a = a.replace(tzinfo=None) if a.tzinfo is None else a.astimezone(UTC).replace(tzinfo=None)
+    return a == b
 
 
 def in_memory_replay(
@@ -19,6 +49,29 @@ def in_memory_replay(
     drift = 0
     halted = 0
     warnings = 0
+
+    # Orphan-event detection: events whose work_item_id has no entry in work_items
+    all_event_wi_ids = set(store.events.keys())
+    wi_ids = set(work_items.keys())
+    orphan_ids = all_event_wi_ids - wi_ids
+    for orphan_id in orphan_ids:
+        orphan_evts = sorted(store.events.get(orphan_id, []), key=lambda e: e.event_seq)
+        is_created = len(orphan_evts) > 0 and orphan_evts[0].transition == "created"
+        if not is_created:
+            halted += 1
+            log.error(
+                "replay.orphan_events",
+                work_item_id=str(orphan_id),
+                event_count=len(orphan_evts),
+            )
+        else:
+            warnings += 1
+            log.warning(
+                "replay.orphan_work_item",
+                work_item_id=str(orphan_id),
+                event_count=len(orphan_evts),
+            )
+
     for wi_id, wi in work_items.items():
         evts = store.events.get(wi_id, [])
         if not evts:
@@ -31,6 +84,7 @@ def in_memory_replay(
             derived_last_seq = 0
             derived_attempt_number = 0
             derived_claimed_by = None
+            derived_claim_expires_at = None
             for evt in sorted(evts, key=lambda e: e.event_seq):
                 if key_set is not None:
                     key_entry = None
@@ -82,11 +136,24 @@ def in_memory_replay(
                     if evt.transition == "claim_acquired":
                         p = evt.payload or {}
                         derived_claimed_by = p.get("actor_id")
+                        expires_str = p.get("expires_at")
+                        derived_claim_expires_at = (
+                            datetime.fromisoformat(expires_str)
+                            if isinstance(expires_str, str)
+                            else expires_str
+                        )
                     elif evt.transition == "claim_stolen":
                         p = evt.payload or {}
                         derived_claimed_by = p.get("new_actor_id")
+                        expires_str = p.get("expires_at")
+                        derived_claim_expires_at = (
+                            datetime.fromisoformat(expires_str)
+                            if isinstance(expires_str, str)
+                            else expires_str
+                        )
                     elif evt.transition in ("claim_released", "claim_expired"):
                         derived_claimed_by = None
+                        derived_claim_expires_at = None
                 elif evt.transition == "escalated":
                     derived_needs_review = True
                 elif evt.transition == "not_before_set":
@@ -128,6 +195,7 @@ def in_memory_replay(
                         if "custom_fields_update" in p:
                             derived_fields = {**derived_fields, **p["custom_fields_update"]}
                         derived_claimed_by = None
+                        derived_claim_expires_at = None
         except SubstrateError:
             halted += 1
         except Exception:
@@ -142,6 +210,9 @@ def in_memory_replay(
                     or derived_last_seq != wi.get("last_event_seq", 0)
                     or derived_attempt_number != wi.get("attempt_number", 0)
                     or derived_claimed_by != wi.get("claimed_by")
+                    # claim_expires_at excluded — see _replay._states_match.
+                    # Heartbeats mutate live without emitting an event, so this
+                    # field cannot be reconstructed from the event stream.
                 ):
                     drift += 1
                 else:

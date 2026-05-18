@@ -4,7 +4,7 @@ import time
 from typing import Any
 
 import structlog
-from prometheus_client import CollectorRegistry, Counter
+from prometheus_client import CollectorRegistry, Counter, Gauge
 
 log = structlog.get_logger()
 
@@ -13,6 +13,7 @@ class Metrics:
     def __init__(self, registry: CollectorRegistry | None = None) -> None:
         self._registry = registry or CollectorRegistry()
         self._counters: dict[str, Counter] = {}
+        self._gauges: dict[str, Gauge] = {}
 
     def _counter(self, name: str, doc: str) -> Counter:
         if name not in self._counters:
@@ -20,6 +21,30 @@ class Metrics:
                 name, doc, ["project"], registry=self._registry
             )
         return self._counters[name]
+
+    def _gauge(self, name: str, doc: str) -> Gauge:
+        if name not in self._gauges:
+            self._gauges[name] = Gauge(
+                name, doc, ["project"], registry=self._registry
+            )
+        return self._gauges[name]
+
+    def set_gauge(self, name: str, project: str, value: float) -> None:
+        gauges = {
+            "events_default_rows": (
+                "substrate_events_default_rows",
+                "Number of rows in events_default catch-all partition",
+            ),
+            "events_partition_horizon_days": (
+                "substrate_events_partition_horizon_days",
+                "Days until the latest known events partition upper bound",
+            ),
+        }
+        if name in gauges:
+            metric_name, doc = gauges[name]
+            self._gauge(metric_name, doc).labels(project=project).set(value)
+        else:
+            log.warning("metrics.unknown_gauge", name=name)
 
     @property
     def registry(self) -> CollectorRegistry:
