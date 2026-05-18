@@ -3,10 +3,18 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from ._contract import Jsonb, check_actor_role_authorized, check_role_gating, resolve_transition
+from ._contract import (
+    Jsonb,
+    check_actor_role_authorized,
+    check_role_gating,
+    resolve_transition,
+    validate_mutation_params,
+)
 from ._errors import ErrorCode, SubstrateError
 from ._event_store import append_event as _store_append
+from ._hooks import run_validator
 from ._types import Event, ValidatorContext
+from ._workflow import validate_field_update
 
 
 def in_memory_transition(
@@ -30,10 +38,6 @@ def in_memory_transition(
     event_id: uuid.UUID | None = None,
     expected_event_seq: int | None = None,
 ) -> tuple[Event, int]:
-    from ._contract import validate_mutation_params
-    from ._hooks import run_validator
-    from ._workflow import validate_field_update
-
     if event_id is None:
         event_id = uuid.uuid4()
     validate_mutation_params(
@@ -152,8 +156,6 @@ def _validate_refs_in_memory(
     work_item_type: str,
     values: dict,
 ) -> None:
-    import uuid
-
     wits = wf_data.get("work_item_types", [])
     wit = next((t for t in wits if t["name"] == work_item_type), None)
     if wit is None:

@@ -3,10 +3,16 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from ._contract import Jsonb, validate_mutation_params, validate_work_item_exists
+from ._contract import (
+    Jsonb,
+    validate_actor_kind,
+    validate_mutation_params,
+    validate_work_item_exists,
+)
 from ._errors import ErrorCode, SubstrateError
 from ._event_store import append_event as _store_append
 from ._types import Event, QueryPage, WorkItem
+from ._workflow import validate_field_values
 
 
 def _dict_contains(haystack: dict, needle: dict) -> bool:
@@ -43,9 +49,6 @@ def in_memory_create_work_item(
     event_id: uuid.UUID | None = None,
     skip_event_id_version_check: bool = False,
 ) -> tuple[WorkItem, Event]:
-    from ._contract import validate_actor_kind
-    from ._workflow import validate_field_values
-
     if event_id is None:
         event_id = uuid.uuid4()
     if not skip_event_id_version_check:

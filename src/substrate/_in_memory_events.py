@@ -8,6 +8,7 @@ from ._contract import (
     check_append_blocked,
     check_reserved_transition,
     validate_mutation_params,
+    validate_read_events_filters,
     validate_work_item_exists,
 )
 from ._event_store import append_event as _store_append
@@ -77,8 +78,6 @@ def in_memory_read_events(
     limit: int = 100,
     before_seq: int | None = None,
 ) -> list[Event]:
-    from ._contract import validate_read_events_filters
-
     validate_read_events_filters(before_seq, work_item_id, start, end)
     return store.read(
         work_item_id=work_item_id,

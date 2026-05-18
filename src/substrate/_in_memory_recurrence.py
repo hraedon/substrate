@@ -4,6 +4,12 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 from ._errors import ErrorCode, SubstrateError
+from ._recurrence import (
+    _find_next_future_slot,
+    compute_next_fire,
+    validate_schedule,
+    validate_template,
+)
 
 
 def in_memory_register_recurrence_rule(
@@ -31,8 +37,6 @@ def in_memory_register_recurrence_rule(
             ErrorCode.WORKFLOW_NOT_REGISTERED,
             f"Workflow {workflow_name!r} v{workflow_version} not registered",
         )
-    from ._recurrence import compute_next_fire, validate_schedule, validate_template
-
     validate_schedule(schedule_kind, schedule_expr)
     validate_template(template)
     rule_id = uuid.uuid4()
@@ -94,8 +98,6 @@ def in_memory_fire_recurrence(
     create_work_item_fn,
     rule_id: uuid.UUID,
 ) -> tuple[dict, dict]:
-    from ._recurrence import _find_next_future_slot, compute_next_fire
-
     rule = recurrence_rules.get(rule_id)
     if rule is None:
         raise SubstrateError(

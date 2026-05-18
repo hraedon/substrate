@@ -7,7 +7,7 @@ from ._contract import Jsonb as _Jsonb
 from ._contract import validate_mutation_params as _validate_mutation_params
 from ._errors import SubstrateError
 from ._observability import Metrics, OpTimer
-from ._types import QueryPage, WorkItem
+from ._types import Event, QueryPage, WorkItem
 
 
 def create_work_item(
@@ -24,7 +24,7 @@ def create_work_item(
     custom_fields: dict | None = None,
     not_before: datetime | None = None,
     event_id: uuid.UUID | None = None,
-) -> tuple[WorkItem, object]:
+) -> tuple[WorkItem, Event]:
     timer = OpTimer(project, "create_work_item")
     try:
         _validate_mutation_params(
